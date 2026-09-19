@@ -1,16 +1,20 @@
-import { buildApp } from "./ap.js";
+import Fastify from "fastify";
 
-const app = buildApp();
+import { registerRoutes } from "./routes.js";
+
+const app = Fastify({ logger: true });
+registerRoutes(app);
+
 const port = Number(process.env.PORT ?? 4117);
 const host = process.env.HOST ?? "0.0.0.0";
 
 const banner = String.raw`
-     _    ___   ____                      
-    / \  |_ _| |  _ \ _ __ _____  ___   _ 
+     _    ___   ____
+    / \  |_ _| |  _ \ _ __ _____  ___   _
    / _ \  | |  | |_) | '__/ _ \ \/ / | | |
   / ___ \ | |  |  __/| | | (_) >  <| |_| |
  /_/   \_\___| |_|   |_|  \___/_/\_\\__, |
-                                      |___/ 
+                                      |___/
 
              A I   P R O X Y
         simple tech. massive possibilities.

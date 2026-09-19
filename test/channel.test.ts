@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildApp } from "../src/ap.js";
+import { buildTestApp } from "./build-test-app.js";
 
 test("channel proxies a request to a polling downstream", async () => {
-  const app = buildApp();
+  const app = buildTestApp();
 
   const created = await app.inject({ method: "POST", url: "/channels" });
   assert.equal(created.statusCode, 201);

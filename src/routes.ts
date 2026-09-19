@@ -1,9 +1,8 @@
-import Fastify from "fastify";
+import type { FastifyInstance } from "fastify";
 
 import { createBroker } from "./create-broker.js";
 
-export function buildApp() {
-  const app = Fastify({ logger: true });
+export function registerRoutes(app: FastifyInstance) {
   const broker = createBroker();
 
   app.get("/health", async () => ({
@@ -79,7 +78,4 @@ export function buildApp() {
       return reply.code(504).send({ error: "downstream_timeout" });
     }
   }
-
-  return app;
 }
-

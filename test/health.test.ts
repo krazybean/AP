@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildApp } from "../src/ap.js";
+import { buildTestApp } from "./build-test-app.js";
 
 test("GET /health reports AP is healthy", async () => {
-  const app = buildApp();
+  const app = buildTestApp();
 
   const response = await app.inject({
     method: "GET",
