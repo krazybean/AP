@@ -1,12 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export interface PendingRequest {
-  id: string;
-  method: string;
-  path: string;
-  headers: Record<string, string | string[] | undefined>;
-  body: unknown;
-}
+import type { Broker, DownstreamResponse, PendingRequest } from "./broker.js";
 
 interface PendingExchange {
   request: PendingRequest;
@@ -15,28 +9,22 @@ interface PendingExchange {
   timeout: NodeJS.Timeout;
 }
 
-export interface DownstreamResponse {
-  statusCode?: number;
-  headers?: Record<string, string>;
-  body?: unknown;
-}
-
 interface Channel {
   id: string;
   queue: PendingExchange[];
   waiters: Array<(request: PendingRequest | null) => void>;
 }
 
-export class ChannelBroker {
+export class ChannelBroker implements Broker {
   private readonly channels = new Map<string, Channel>();
 
-  createChannel() {
+  async createChannel() {
     const id = randomUUID();
     this.channels.set(id, { id, queue: [], waiters: [] });
     return id;
   }
 
-  hasChannel(id: string) {
+  async hasChannel(id: string) {
     return this.channels.has(id);
   }
 
@@ -90,7 +78,7 @@ export class ChannelBroker {
     });
   }
 
-  respond(channelId: string, requestId: string, response: DownstreamResponse) {
+  async respond(channelId: string, requestId: string, response: DownstreamResponse) {
     const channel = this.channels.get(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
 
