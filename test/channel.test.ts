@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildApp } from "../src/ap.js";
+import { buildApp } from "../src/server.js";
 
 test("channel proxies a request to a polling downstream", async () => {
   const app = buildApp();
