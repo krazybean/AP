@@ -5,7 +5,7 @@
   "description": "Public rendezvous and proxy service for APP-speaking applications.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
