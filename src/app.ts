@@ -1,10 +1,10 @@
 import Fastify from "fastify";
 
-import { ChannelBroker } from "./channel-broker.js";
+import { createBroker } from "./create-broker.js";
 
 export function buildApp() {
   const app = Fastify({ logger: true });
-  const broker = new ChannelBroker();
+  const broker = createBroker();
 
   app.get("/health", async () => ({
     status: "ok",
@@ -12,7 +12,7 @@ export function buildApp() {
   }));
 
   app.post("/channels", async (_request, reply) => {
-    const channel = broker.createChannel();
+    const channel = await broker.createChannel();
     return reply.code(201).send({
       channel,
       url: `/c/${channel}`,
@@ -34,7 +34,7 @@ export function buildApp() {
     Body: { statusCode?: number; headers?: Record<string, string>; body?: unknown };
   }>("/channels/:channel/responses/:requestId", async (request, reply) => {
     try {
-      broker.respond(request.params.channel, request.params.requestId, request.body ?? {});
+      await broker.respond(request.params.channel, request.params.requestId, request.body ?? {});
       return reply.code(202).send({ accepted: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -58,7 +58,7 @@ export function buildApp() {
     request: { method: string; headers: Record<string, string | string[] | undefined>; body?: unknown },
     reply: { code: (statusCode: number) => any; header: (name: string, value: string) => any; send: (payload?: unknown) => any },
   ) {
-    if (!broker.hasChannel(channel)) {
+    if (!(await broker.hasChannel(channel))) {
       return reply.code(404).send({ error: "channel_not_found" });
     }
 
