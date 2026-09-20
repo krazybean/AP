@@ -140,4 +140,4 @@ dist
 # Vite files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-.vite/
+.vite/\n\n# Vercel local project metadata\n.vercel/\n
