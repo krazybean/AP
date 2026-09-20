@@ -1,120 +1,123 @@
 # AP — AI Proxy
 
-AP is a public rendezvous and proxy service for private applications that expose AI-facing capabilities.
+**AP connects. APP communicates. Applications define capability.**
 
-The architectural split is intentionally small:
-
-- **AP connects.** It gives a private application stable public addressability and hands ordinary HTTP traffic back and forth.
-- **APP communicates.** AI Proxy Protocol is the application-neutral, self-describing contract applications use to advertise capabilities and interaction semantics.
-- **Applications define capability.** AP does not contain Binder-, Loom-, or other application-specific knowledge.
+AP is a public rendezvous and proxy service that gives private applications an ordinary HTTPS surface for AI clients.
 
 ```text
-AI client ── ordinary HTTPS ──> AP channel ── traffic handoff ──> private application
+AI client ── HTTPS ──> AP public channel ──> polling uplink ──> private application
 ```
 
-An AI client does not discover AP or create a channel. A private application establishes an AP channel first and gives that public channel URL to the AI client. Normal HTTP requests are the baseline; an AI client does not need AP-specific networking support.
+The private application connects **outward** to AP. It creates a channel, services requests for that channel, and gives the resulting public URL to an AI client. The AI client needs only normal web requests: no VPN, inbound port, ngrok, WebSocket, MCP, or AP-specific networking.
 
-## APP 1.0 contract
+Production endpoint: `https://ap.krazybean.com`
 
-APP 1.0 begins with one deliberately small invariant:
+> **Prototype warning:** AP currently has no authentication or abuse controls. Channel creation is public and channel IDs should not be treated as production-grade authorization. Use the current service for controlled development and experiments.
 
-> The root (`/`) of an APP 1.0 application is its machine-readable landing page. It identifies the application and describes the routes or capabilities the application chooses to expose.
+## APP 1.0
 
-AP does **not** author, interpret, or maintain that landing page. The downstream application does.
+APP (AI Proxy Protocol) is the application-facing contract. Its first invariant is:
 
-Once a channel exists, AP maps the public channel namespace onto the downstream application:
+> **The root (`/`) of an APP 1.0 application is its machine-readable landing page. It identifies the application and describes the routes or capabilities the application chooses to expose.**
 
-```text
-Public AP request              Downstream request
-/c/abc123                  ->  /
-/c/abc123/projects         ->  /projects
-/c/abc123/context          ->  /context
-```
+AP does not author or interpret this document. The downstream application owns its routes, schemas, descriptions, and semantics.
 
-Therefore an unfamiliar AI client can be given only the established channel URL, request its root, learn what the downstream application exposes, and then use those advertised routes.
-
-The exact APP 1.0 landing-page schema is still being designed. Applications should not depend on an undocumented JSON shape yet.
-
-## Designing an application for AP
-
-An AP-compatible application should be designed around these boundaries:
-
-1. **Implement APP 1.0 at the application boundary.** The application's root is self-describing and machine-readable.
-2. **Own your capabilities.** Route names, descriptions, inputs, outputs, and application semantics belong to the application, not AP.
-3. **Treat AP as transport infrastructure.** AP knows how to associate traffic with a channel; it should not need to understand application payloads.
-4. **Use ordinary HTTP semantics.** A client that can make normal web requests should be able to interact through an established AP channel.
-5. **Do not require the AI client to establish the channel.** The private application establishes or reclaims its channel before sharing the resulting public URL.
-6. **Do not assume a permanent transport connection.** Channel identity and any particular uplink connection are separate concerns.
-
-A minimal conceptual integration looks like this:
-
-```text
-Private application
-      │
-      │ establish / reclaim channel
-      ▼
-     AP
-      │
-      └── public channel URL
-               │
-               │ given to AI client
-               ▼
-           GET channel root
-               │
-               ▼
-      downstream application /
-               │
-               └── APP 1.0 route index
-```
-
-### What the downstream must provide
-
-At minimum, an APP-speaking downstream will provide:
-
-- a machine-readable root landing page;
-- identification of the APP protocol/version it implements;
-- identification or description of the application;
-- discovery information for the routes/capabilities it exposes.
-
-The concrete schema for those fields will be specified as APP 1.0 evolves.
-
-### What AP provides
-
-AP is responsible for public channel addressability and traffic handoff. It is intentionally application-blind.
-
-Infrastructure concerns such as channel creation/reclamation, authentication, channel lifetime, uplink transport, persistence, and the security model are still under design. They should not be inferred from the current scaffold.
-
-## Current scope
-
-The repository currently contains the AP service baseline and the first documented APP 1.0 application contract. Channel establishment and proxy routing are the next implementation work; they are not yet provided by the running service.
-
-## Development
-
-Requires Node.js 20 or newer.
-
-```bash
-npm install
-npm run dev
-```
-
-The development server defaults to port `4117`. Set `PORT` to override it.
-
-Health check: `GET /health`
+A minimal landing page currently looks like:
 
 ```json
 {
-  "status": "ok",
-  "service": "ap"
+  "protocol": "APP/1.0",
+  "application": "Example App",
+  "description": "What this application lets an AI do.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/projects",
+      "description": "Lists projects visible to the AI."
+    }
+  ]
 }
 ```
 
-Validate the project with:
+This shape is the current interoperability baseline, **not yet a frozen APP 1.0 schema**. See [docs/APP-1.0.md](docs/APP-1.0.md).
 
-```bash
-npm run build
-npm test
+## Integrating a private application
+
+The current uplink is deliberately boring HTTP long polling.
+
+1. `POST /channels` to create a channel.
+2. Save the returned channel ID and public URL.
+3. Repeatedly `GET /channels/{channel}/next`.
+4. A `204` means there is no request yet; poll again.
+5. For a request, execute the corresponding local APP route.
+6. `POST /channels/{channel}/responses/{requestId}` with its result.
+7. Give only the public `/c/{channel}` URL to the AI client.
+
+Public requests map directly into the downstream namespace:
+
+```text
+https://ap.krazybean.com/c/abc123           -> /
+https://ap.krazybean.com/c/abc123/projects  -> /projects
 ```
 
-## Deployment
+The channel root is therefore the application's APP landing page, not an AP handshake page.
 
-Vercel is the initial deployment target, not an architectural dependency. AP should remain deployable as a normal Node.js web service.
+For exact request/response envelopes and an implementation recipe, see [docs/INTEGRATION.md](docs/INTEGRATION.md). The working reference downstream is [scripts/mock-downstream.ts](scripts/mock-downstream.ts).
+
+## AP HTTP surface
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | AP infrastructure health |
+| `POST` | `/channels` | Create a channel |
+| `GET` | `/channels/:channel/next` | Private downstream waits for the next request |
+| `POST` | `/channels/:channel/responses/:requestId` | Private downstream returns a response |
+| any | `/c/:channel[/...]` | Public AI-facing channel namespace |
+
+Current channel creation returns HTTP `201`:
+
+```json
+{
+  "channel": "<uuid>",
+  "url": "/c/<uuid>"
+}
+```
+
+## Development
+
+Node.js 20.x is the currently validated runtime.
+
+```bash
+npm install
+npm run build
+npm test
+npm run dev
+```
+
+Local AP defaults to `http://localhost:4117`. Set `PORT` or `HOST` to override it.
+
+Run the reference downstream locally:
+
+```bash
+npm run mock:downstream
+```
+
+Or connect it to production:
+
+```bash
+AP_URL=https://ap.krazybean.com npm run mock:downstream
+```
+
+It prints a public channel URL. While the mock remains running, requests to that URL are handed to the local process and returned through AP.
+
+## Deployment and state
+
+Vercel is the initial deployment target, not part of the AP contract. Production uses shared Redis state through Upstash; local development falls back to the in-memory broker when the Vercel/Upstash KV environment variables are absent.
+
+AP must remain conceptually deployable as a normal Node service. Transport implementation may evolve without changing APP application semantics.
+
+## Current boundaries
+
+The transport proof is working end-to-end. Several production concerns are intentionally unfinished: authentication, durable application identity/channel reclaim, agreed channel lifetime, rate limiting/abuse controls, stronger request ownership validation, and the final APP schema/security model.
+
+Do not infer guarantees for those concerns from the prototype implementation.
