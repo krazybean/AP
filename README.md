@@ -12,7 +12,7 @@ The private application connects **outward** to AP. It creates a channel, servic
 
 Production endpoint: `https://ap.krazybean.com`
 
-> **Prototype warning:** AP currently has no authentication or abuse controls. Channel creation is public and channel IDs should not be treated as production-grade authorization. Use the current service for controlled development and experiments.
+> **Prototype warning:** AP currently has no user authentication or abuse controls. Channel creation is public; the returned channel secret only protects the private downstream uplink. Use the current service for controlled development and experiments.
 
 ## APP 1.0
 
@@ -46,11 +46,11 @@ This shape is the current interoperability baseline, **not yet a frozen APP 1.0 
 The current uplink is deliberately boring HTTP long polling.
 
 1. `POST /channels` to create a channel.
-2. Save the returned channel ID and public URL.
-3. Repeatedly `GET /channels/{channel}/next`.
+2. Save the returned channel ID, downstream secret, and public URL.
+3. Repeatedly `GET /channels/{channel}/next` with the downstream secret.
 4. A `204` means there is no request yet; poll again.
 5. For a request, execute the corresponding local APP route.
-6. `POST /channels/{channel}/responses/{requestId}` with its result.
+6. `POST /channels/{channel}/responses/{requestId}` with its result and the downstream secret.
 7. Give only the public `/c/{channel}` URL to the AI client.
 
 Public requests map directly into the downstream namespace:
@@ -79,6 +79,7 @@ Current channel creation returns HTTP `201`:
 ```json
 {
   "channel": "<uuid>",
+  "secret": "<downstream channel secret>",
   "url": "/c/<uuid>"
 }
 ```
@@ -94,7 +95,14 @@ npm test
 npm run dev
 ```
 
+With Upstash credentials available, run the opt-in Redis integration checks:
+
+```bash
+AP_REDIS_INTEGRATION=1 npm test
+```
+
 Local AP defaults to `http://localhost:4117`. Set `PORT` or `HOST` to override it.
+Channels expire after 15 minutes without activity. Reconnecting applications create a new channel. Channel creation is limited to 10 per source IP per hour by default; set `CHANNELS_PER_IP_PER_HOUR` to change the prototype limit. Set `REQUIRE_LICENSE=true` to require a non-empty `X-APP-License` header; license values are not validated or persisted yet.
 
 Run the reference downstream locally:
 
@@ -110,6 +118,8 @@ AP_URL=https://ap.krazybean.com npm run mock:downstream
 
 It prints a public channel URL. While the mock remains running, requests to that URL are handed to the local process and returned through AP.
 
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for health, Redis outage, expiry, and restart procedures.
+
 ## Deployment and state
 
 Vercel is the initial deployment target, not part of the AP contract. Production uses shared Redis state through Upstash; local development falls back to the in-memory broker when the Vercel/Upstash KV environment variables are absent.
@@ -118,6 +128,6 @@ AP must remain conceptually deployable as a normal Node service. Transport imple
 
 ## Current boundaries
 
-The transport proof is working end-to-end. Several production concerns are intentionally unfinished: authentication, durable application identity/channel reclaim, agreed channel lifetime, rate limiting/abuse controls, stronger request ownership validation, and the final APP schema/security model.
+The transport proof is working end-to-end. Several production concerns are intentionally unfinished: user authentication, durable application identity/channel reclaim, agreed channel lifetime, broader abuse controls, and the final APP schema/security model.
 
 Do not infer guarantees for those concerns from the prototype implementation.

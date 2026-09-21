@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
-import type { Broker, DownstreamResponse, PendingRequest } from "./broker.js";
+import type { Broker, BrokerMetrics, DownstreamResponse, PendingRequest } from "./broker.js";
 
 interface PendingExchange {
   request: PendingRequest;
@@ -11,21 +11,62 @@ interface PendingExchange {
 
 interface Channel {
   id: string;
+  secret: string;
+  expiresAt: number;
   queue: PendingExchange[];
   waiters: Array<(request: PendingRequest | null) => void>;
 }
 
+interface CreationLimit {
+  count: number;
+  expiresAt: number;
+}
+
+const CHANNEL_CREATION_WINDOW_MS = 60 * 60 * 1_000;
+const CHANNEL_TTL_MS = 15 * 60 * 1_000;
+
 export class ChannelBroker implements Broker {
   private readonly channels = new Map<string, Channel>();
+  private readonly creationLimits = new Map<string, CreationLimit>();
 
-  async createChannel() {
+  async health() {}
+
+  metrics(): BrokerMetrics {
+    let queuedRequests = 0;
+    let inFlightRequests = 0;
+    for (const channel of this.channels.values()) {
+      for (const exchange of channel.queue) {
+        if ((exchange.request as PendingRequest & { delivered?: boolean }).delivered) inFlightRequests += 1;
+        else queuedRequests += 1;
+      }
+    }
+    return { queuedRequests, inFlightRequests };
+  }
+
+  async createChannel(rateLimitKey = "default", limit = 10) {
+    const now = Date.now();
+    const current = this.creationLimits.get(rateLimitKey);
+    const window = current && current.expiresAt > now
+      ? current
+      : { count: 0, expiresAt: now + CHANNEL_CREATION_WINDOW_MS };
+    if (window.count >= limit) throw new Error("CHANNEL_RATE_LIMITED");
+    window.count += 1;
+    this.creationLimits.set(rateLimitKey, window);
+
     const id = randomUUID();
-    this.channels.set(id, { id, queue: [], waiters: [] });
-    return id;
+    const secret = randomBytes(32).toString("base64url");
+    this.channels.set(id, {
+      id,
+      secret,
+      expiresAt: Date.now() + CHANNEL_TTL_MS,
+      queue: [],
+      waiters: [],
+    });
+    return { id, secret };
   }
 
   async hasChannel(id: string) {
-    return this.channels.has(id);
+    return this.getChannel(id) !== undefined;
   }
 
   async dispatch(
@@ -33,8 +74,9 @@ export class ChannelBroker implements Broker {
     request: Omit<PendingRequest, "id">,
     timeoutMs = 30_000,
   ): Promise<DownstreamResponse> {
-    const channel = this.channels.get(channelId);
+    const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     return new Promise((resolve, reject) => {
       const id = randomUUID();
@@ -54,9 +96,11 @@ export class ChannelBroker implements Broker {
     });
   }
 
-  async next(channelId: string, waitMs = 25_000): Promise<PendingRequest | null> {
-    const channel = this.channels.get(channelId);
+  async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
+    const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const next = channel.queue.find((item) => !(item.request as PendingRequest & { delivered?: boolean }).delivered);
     if (next) {
@@ -78,9 +122,11 @@ export class ChannelBroker implements Broker {
     });
   }
 
-  async respond(channelId: string, requestId: string, response: DownstreamResponse) {
-    const channel = this.channels.get(channelId);
+  async respond(channelId: string, secret: string, requestId: string, response: DownstreamResponse) {
+    const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const index = channel.queue.findIndex((item) => item.request.id === requestId);
     if (index < 0) throw new Error("REQUEST_NOT_FOUND");
@@ -88,5 +134,14 @@ export class ChannelBroker implements Broker {
     const [exchange] = channel.queue.splice(index, 1);
     clearTimeout(exchange.timeout);
     exchange.resolve(response);
+  }
+
+  private getChannel(id: string) {
+    const channel = this.channels.get(id);
+    if (channel && channel.expiresAt <= Date.now()) {
+      this.channels.delete(id);
+      return undefined;
+    }
+    return channel;
   }
 }

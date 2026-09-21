@@ -3,7 +3,11 @@ const apBase = process.env.AP_URL ?? "http://localhost:4117";
 const created = await fetch(`${apBase}/channels`, { method: "POST" });
 if (!created.ok) throw new Error(`Failed to create channel: ${created.status}`);
 
-const { channel, url } = (await created.json()) as { channel: string; url: string };
+const { channel, secret, url } = (await created.json()) as {
+  channel: string;
+  secret: string;
+  url: string;
+};
 
 console.log("Mock APP downstream connected");
 console.log(`Channel: ${channel}`);
@@ -11,7 +15,9 @@ console.log(`Public root: ${apBase}${url}`);
 console.log("Waiting for requests...");
 
 while (true) {
-  const next = await fetch(`${apBase}/channels/${channel}/next`);
+  const next = await fetch(`${apBase}/channels/${channel}/next`, {
+    headers: { authorization: `Bearer ${secret}` },
+  });
   if (next.status === 204) continue;
   if (!next.ok) throw new Error(`Channel polling failed: ${next.status}`);
 
@@ -51,7 +57,10 @@ while (true) {
     `${apBase}/channels/${channel}/responses/${request.id}`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`,
+      },
       body: JSON.stringify(response),
     },
   );

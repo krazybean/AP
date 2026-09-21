@@ -17,4 +17,7 @@ renderStartupBanner({
   port,
 });
 
-app.listen({ port, host });
+void app.listen({ port, host }).catch((error) => {
+  app.log.error(error, "AP failed to start");
+  process.exitCode = 1;
+});
