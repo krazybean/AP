@@ -198,9 +198,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   }
 
   function bearerToken(authorization: string | string[] | undefined) {
-    if (typeof authorization !== "string") throw new Error("CHANNEL_UNAUTHORIZED");
-    const match = authorization.match(/^Bearer (.+)$/);
-    if (!match) throw new Error("CHANNEL_UNAUTHORIZED");
-    return match[1];
+    if (typeof authorization !== "string") return "";
+    return authorization.match(/^Bearer (.+)$/)?.[1] ?? "";
   }
 }
