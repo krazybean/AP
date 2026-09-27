@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import type { Broker, DownstreamResponse } from "./broker.js";
+import { BrokerUnavailableError, type Broker, type DownstreamResponse } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 
 function errorMessage(error: unknown) {
@@ -45,18 +45,39 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     brokerErrors: 0,
   };
 
+  function brokerUnavailable(error: unknown, reply: any) {
+    if (!(error instanceof BrokerUnavailableError)) return false;
+    metrics.brokerErrors += 1;
+    if (error.retryAfterSeconds !== undefined) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+    }
+    reply.code(503).send({ error: "broker_unavailable" });
+    return true;
+  }
+
   app.get("/health", async (_request, reply) => {
     try {
       await broker.health();
-      return { status: "ok", service: "ap", broker: "ok", ...broker.metrics() };
+      return {
+        status: "ok",
+        service: "ap",
+        broker: "ok",
+        brokerType: broker.type,
+        ...broker.metrics(),
+      };
     } catch (error) {
       metrics.brokerErrors += 1;
       app.log.error(error, "AP health check failed");
-      return reply.code(503).send({ status: "degraded", service: "ap", broker: "unavailable" });
+      return reply.code(503).send({
+        status: "degraded",
+        service: "ap",
+        broker: "unavailable",
+        brokerType: broker.type,
+      });
     }
   });
 
-  app.get("/metrics", async () => ({ ...metrics, ...broker.metrics() }));
+  app.get("/metrics", async () => ({ brokerType: broker.type, ...metrics, ...broker.metrics() }));
 
   app.post("/channels", async (request, reply) => {
     const license = request.headers["x-app-license"];
@@ -78,16 +99,13 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         metrics.channelRateLimits += 1;
         return reply.header("retry-after", "3600").code(429).send({ error: "channel_rate_limited" });
       }
+      if (brokerUnavailable(error, reply)) return;
       metrics.brokerErrors += 1;
       throw error;
     }
   });
 
   app.get<{ Params: { channel: string } }>("/channels/:channel/next", async (request, reply) => {
-    if (!(await broker.hasChannel(request.params.channel))) {
-      return reply.code(404).send({ error: "channel_not_found" });
-    }
-
     try {
       const pending = await broker.next(request.params.channel, bearerToken(request.headers.authorization));
       if (!pending) return reply.code(204).send();
@@ -99,6 +117,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       if (errorMessage(error) === "CHANNEL_UNAUTHORIZED") {
         return reply.code(401).send({ error: "channel_unauthorized" });
       }
+      if (brokerUnavailable(error, reply)) return;
       throw error;
     }
   });
@@ -107,10 +126,6 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     Params: { channel: string; requestId: string };
     Body: unknown;
   }>("/channels/:channel/responses/:requestId", async (request, reply) => {
-    if (!(await broker.hasChannel(request.params.channel))) {
-      return reply.code(404).send({ error: "channel_not_found" });
-    }
-
     const response = parseDownstreamResponse(request.body);
     if (!response) return reply.code(400).send({ error: "invalid_response" });
 
@@ -133,6 +148,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       if (message === "CHANNEL_UNAUTHORIZED") {
         return reply.code(401).send({ error: "channel_unauthorized" });
       }
+      if (brokerUnavailable(error, reply)) return;
       throw error;
     }
   });
@@ -151,10 +167,6 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     request: { method: string; headers: Record<string, string | string[] | undefined>; body?: unknown },
     reply: { code: (statusCode: number) => any; header: (name: string, value: string) => any; send: (payload?: unknown) => any },
   ) {
-    if (!(await broker.hasChannel(channel))) {
-      return reply.code(404).send({ error: "channel_not_found" });
-    }
-
     try {
       metrics.proxyRequests += 1;
       const downstream = await broker.dispatch(channel, {
@@ -179,6 +191,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         metrics.proxyTimeouts += 1;
         return reply.code(504).send({ error: "downstream_timeout" });
       }
+      if (brokerUnavailable(error, reply)) return;
       metrics.brokerErrors += 1;
       throw error;
     }
