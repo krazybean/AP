@@ -16,6 +16,7 @@ test("GET /health reports AP is healthy", async () => {
     status: "ok",
     service: "ap",
     broker: "ok",
+    brokerType: "memory",
     queuedRequests: 0,
     inFlightRequests: 0,
   });
@@ -25,6 +26,7 @@ test("GET /health reports AP is healthy", async () => {
 
 test("GET /health rejects when the broker is unavailable", async () => {
   const app = buildTestApp({
+    type: "redis",
     health: async () => {
       throw new Error("REDIS_DOWN");
     },
@@ -37,6 +39,7 @@ test("GET /health rejects when the broker is unavailable", async () => {
     status: "degraded",
     service: "ap",
     broker: "unavailable",
+    brokerType: "redis",
   });
   await app.close();
 });
@@ -48,6 +51,7 @@ test("GET /metrics reports operational counters", async () => {
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), {
+    brokerType: "memory",
     channelsCreated: 0,
     channelRateLimits: 0,
     proxyRequests: 0,
