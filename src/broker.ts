@@ -15,9 +15,19 @@ export interface DownstreamResponse {
 export interface BrokerMetrics {
   queuedRequests: number;
   inFlightRequests: number;
+  redisCommands?: number;
+  redisPollCommands?: number;
+}
+
+export class BrokerUnavailableError extends Error {
+  constructor(message = "BROKER_UNAVAILABLE", readonly retryAfterSeconds?: number) {
+    super(message);
+    this.name = "BrokerUnavailableError";
+  }
 }
 
 export interface Broker {
+  readonly type: "memory" | "redis";
   health(): Promise<void>;
   metrics(): BrokerMetrics;
   createChannel(rateLimitKey?: string, limit?: number): Promise<{ id: string; secret: string }>;

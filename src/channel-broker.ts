@@ -26,6 +26,7 @@ const CHANNEL_CREATION_WINDOW_MS = 60 * 60 * 1_000;
 const CHANNEL_TTL_MS = 15 * 60 * 1_000;
 
 export class ChannelBroker implements Broker {
+  readonly type = "memory" as const;
   private readonly channels = new Map<string, Channel>();
   private readonly creationLimits = new Map<string, CreationLimit>();
 
