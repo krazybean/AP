@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 
-import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse } from "./broker.js";
+import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
+import { buildChannelUrl, classifyChannelHost, normalizeBaseDomain } from "./origin-routing.js";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "";
@@ -84,6 +85,16 @@ function parseAccess(body: unknown): AccessConfig | null {
   }
 }
 
+function parseExposure(body: unknown): ExposureConfig | null {
+  if (body === undefined || body === null) return { mode: "path" };
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const exposure = (body as Record<string, unknown>).exposure;
+  if (exposure === undefined) return { mode: "path" };
+  if (!exposure || typeof exposure !== "object" || Array.isArray(exposure)) return null;
+  const mode = (exposure as Record<string, unknown>).mode;
+  return mode === "path" || mode === "isolated-host" ? { mode } : null;
+}
+
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker()) {
   const metrics = {
     channelsCreated: 0,
@@ -103,6 +114,17 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   let healthAt = 0;
   let healthOk: boolean | undefined;
   let healthCheck: Promise<boolean> | undefined;
+
+  function hostClassification(request: { headers: Record<string, string | string[] | undefined> }) {
+    const configured = process.env.AP_CHANNEL_BASE_DOMAIN;
+    if (!configured) return null;
+    try {
+      const host = typeof request.headers.host === "string" ? request.headers.host : "";
+      return classifyChannelHost(host, configured);
+    } catch {
+      return "invalid" as const;
+    }
+  }
 
   async function brokerHealthy() {
     if (healthOk !== undefined && Date.now() - healthAt < HEALTH_CACHE_MS) return healthOk;
@@ -166,14 +188,27 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       metrics.invalidScopeConfigurations += 1;
       return reply.code(400).send({ error: "invalid_access_configuration" });
     }
+    const exposure = parseExposure(request.body);
+    if (!exposure) return reply.code(400).send({ error: "invalid_exposure_configuration" });
+    let baseDomain: string | undefined;
+    if (exposure.mode === "isolated-host") {
+      try {
+        baseDomain = normalizeBaseDomain(process.env.AP_CHANNEL_BASE_DOMAIN ?? "");
+      } catch {
+        return reply.code(503).send({ error: "isolated_host_not_configured" });
+      }
+    }
 
     try {
-      const { id: channel, secret, accessMode, clientCredential } = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT, access);
+      const created = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT, access, exposure);
+      const { id: channel, secret, accessMode, clientCredential } = created;
+      const exposureMode = created.exposureMode ?? exposure.mode;
       metrics.channelsCreated += 1;
       return reply.code(201).send({
         channel,
         secret,
-        url: `/c/${channel}`,
+        url: exposureMode === "isolated-host" ? buildChannelUrl(channel, baseDomain!) : `/c/${channel}`,
+        ...(exposureMode === "isolated-host" ? { exposure: { mode: exposureMode } } : {}),
         access: {
           mode: accessMode,
           ...(clientCredential?.scopes ? { scopes: clientCredential.scopes } : {}),
@@ -293,14 +328,43 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     return proxyToChannel(request.params.channel, requestPath(request.url, request.params.channel, "/"), request, reply);
   });
 
+  async function isolatedHostProxy(request: { url: string; headers: Record<string, string | string[] | undefined>; method: string; body?: unknown }, reply: any) {
+    const classification = hostClassification(request);
+    if (classification === "invalid") {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    if (!classification) return reply.code(404).send({ error: "not_found" });
+    const channel = classification;
+    const exposure = await broker.channelExposure(channel);
+    if (exposure !== "isolated-host") {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    return proxyToChannel(channel, request.url || "/", request, reply, true);
+  }
+
+  app.addHook("preHandler", async (request, reply) => {
+    const classification = hostClassification(request);
+    if (classification) {
+      return isolatedHostProxy(request, reply);
+    }
+  });
+  app.setNotFoundHandler((request, reply) => {
+    if (hostClassification(request)) return isolatedHostProxy(request, reply);
+    return reply.code(404).send({ error: "not_found" });
+  });
+
   async function proxyToChannel(
     channel: string,
     path: string,
     request: { method: string; headers: Record<string, string | string[] | undefined>; body?: unknown },
     reply: { code: (statusCode: number) => any; header: (name: string, value: string) => any; send: (payload?: unknown) => any },
+    isolatedHost = false,
   ) {
     if (!UUID.test(channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
+      if (!isolatedHost && await broker.channelExposure(channel) === "isolated-host") {
+        return reply.code(404).send({ error: "channel_not_found" });
+      }
       let dispatchPath = path;
       try {
         const authenticated = await broker.authenticateClient(channel, clientAccessToken(request.headers));

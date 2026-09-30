@@ -11,6 +11,7 @@ import {
   type BrokerMetrics,
   type DownstreamResponse,
   type PendingRequest,
+  type ExposureConfig,
 } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes, type ClientScope } from "./client-scopes.js";
@@ -102,7 +103,7 @@ export class RedisBroker implements Broker {
     };
   }
 
-  async createChannel(rateLimitKey = "default", limit = 10, access: import("./broker.js").AccessConfig = { mode: "public" }) {
+  async createChannel(rateLimitKey = "default", limit = 10, access: import("./broker.js").AccessConfig = { mode: "public" }, exposure: ExposureConfig = { mode: "path" }) {
     const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
     const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}:${bucket}`;
     const count = await this.command(() => this.redis.incr(rateLimitKeyName));
@@ -113,12 +114,12 @@ export class RedisBroker implements Broker {
 
     const id = randomUUID();
     const secret = randomBytes(32).toString("base64url");
-    await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secret, accessMode: access.mode }), { ex: CHANNEL_TTL_SECONDS }));
-    if (access.mode === "public") return { id, secret, accessMode: "public" as const };
+    await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secret, accessMode: access.mode, exposureMode: exposure.mode }), { ex: CHANNEL_TTL_SECONDS }));
+    if (access.mode === "public") return { id, secret, accessMode: "public" as const, exposureMode: exposure.mode };
     await this.command(() => this.redis.hset(this.accessKey(id), { mode: "bearer", count: 0 }));
     await this.command(() => this.redis.expire(this.accessKey(id), CHANNEL_TTL_SECONDS));
     const clientCredential = await this.createClientCredential(id, secret, undefined, validateScopes(access.scopes));
-    return { id, secret, accessMode: "bearer" as const, clientCredential };
+    return { id, secret, accessMode: "bearer" as const, exposureMode: exposure.mode, clientCredential };
   }
 
   async authenticateClient(channelId: string, token: string) {
@@ -159,6 +160,11 @@ export class RedisBroker implements Broker {
 
   async hasChannel(id: string) {
     return (await this.command(() => this.redis.exists(this.channelKey(id)))) === 1;
+  }
+
+  async channelExposure(id: string) {
+    const stored = await this.command(() => this.redis.get<string>(this.channelKey(id)));
+    return stored === null ? null : this.parseChannel(stored).exposureMode;
   }
 
   async dispatch(
@@ -316,9 +322,9 @@ export class RedisBroker implements Broker {
 
   private parseChannel(value: string) {
     try {
-      const parsed = JSON.parse(value) as { secret?: unknown; accessMode?: unknown };
-      if (typeof parsed.secret === "string") return { secret: parsed.secret, accessMode: parsed.accessMode === "bearer" ? "bearer" : "public" } as const;
+      const parsed = JSON.parse(value) as { secret?: unknown; accessMode?: unknown; exposureMode?: unknown };
+      if (typeof parsed.secret === "string") return { secret: parsed.secret, accessMode: parsed.accessMode === "bearer" ? "bearer" : "public", exposureMode: parsed.exposureMode === "isolated-host" ? "isolated-host" : "path" } as const;
     } catch {}
-    return { secret: value, accessMode: "public" as const };
+    return { secret: value, accessMode: "public" as const, exposureMode: "path" as const };
   }
 }

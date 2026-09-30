@@ -47,6 +47,7 @@ test("AP access token is separate from downstream Authorization and is not forwa
       return originalDispatch(id, { method: "GET", path: "/", headers: request.headers, body: undefined }, 1);
     },
     authenticateClient: broker.authenticateClient.bind(broker),
+    channelExposure: broker.channelExposure.bind(broker),
     createClientCredential: broker.createClientCredential.bind(broker),
     revokeClientCredential: broker.revokeClientCredential.bind(broker),
   } as never);

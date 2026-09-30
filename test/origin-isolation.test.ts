@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildChannelUrl, parseChannelHost } from "../src/origin-routing.js";
+import { buildChannelUrl, normalizeBaseDomain, parseChannelHost } from "../src/origin-routing.js";
 import { ChannelBroker } from "../src/channel-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
@@ -18,6 +18,9 @@ test("isolated URLs use the configured base and exact host shape", () => {
   assert.equal(parseChannelHost(`${channelA}.${baseDomain}`, baseDomain), channelA);
   assert.equal(parseChannelHost(`${channelA.toUpperCase()}.${baseDomain.toUpperCase()}:4117`, baseDomain), channelA);
   assert.equal(parseChannelHost(`${channelA}.${baseDomain}.`, baseDomain), channelA);
+  assert.throws(() => normalizeBaseDomain("https://channels.example.test"));
+  assert.throws(() => normalizeBaseDomain("*.channels.example.test"));
+  assert.throws(() => normalizeBaseDomain("channels.example.test/path"));
   for (const host of [
     `${channelA}.${baseDomain}.evil.com`,
     `evil.${channelA}.${baseDomain}`,
@@ -76,9 +79,25 @@ test("isolated hosts own every path while legacy shared paths fail closed", asyn
   await app.inject({ method: "POST", url: `/channels/${channel}/responses/${pending.json().id}`, headers: { authorization: `Bearer ${secret}` }, payload: { statusCode: 200, body: "ok" } });
   assert.equal((await downstream).body, "ok");
 
-  const control = await app.inject({ method: "GET", url: "/health", headers: { host } });
-  assert.notEqual(control.json()?.service, "ap");
-  assert.equal(control.statusCode, 504);
+  const control = app.inject({ method: "GET", url: "/health", headers: { host } });
+  const healthPending = await app.inject({ method: "GET", url: `/channels/${channel}/next`, headers: { authorization: `Bearer ${secret}` } });
+  assert.equal(healthPending.json().path, "/health");
+  await app.inject({ method: "POST", url: `/channels/${channel}/responses/${healthPending.json().id}`, headers: { authorization: `Bearer ${secret}` }, payload: { statusCode: 200, body: "downstream-health" } });
+  assert.equal((await control).body, "downstream-health");
+
+  const second = await app.inject({ method: "POST", url: "/channels", payload: { exposure: { mode: "path" }, access: { mode: "bearer", scopes: [{ methods: ["GET"], path: "/allowed/*" }] } } });
+  const secondBody = second.json();
+  const wrongHost = app.inject({ method: "GET", url: `/c/${secondBody.channel}/allowed/item`, headers: { host, "x-ap-access-token": secondBody.access.token } });
+  const crossPending = await app.inject({ method: "GET", url: `/channels/${channel}/next`, headers: { authorization: `Bearer ${secret}` } });
+  assert.equal(crossPending.json().path, `/c/${secondBody.channel}/allowed/item`);
+  await app.inject({ method: "POST", url: `/channels/${channel}/responses/${crossPending.json().id}`, headers: { authorization: `Bearer ${secret}` }, payload: { statusCode: 200, body: "host-authoritative" } });
+  assert.equal((await wrongHost).body, "host-authoritative");
+
+  const protectedCreated = await app.inject({ method: "POST", url: "/channels", payload: { exposure: { mode: "isolated-host" }, access: { mode: "bearer", scopes: [{ methods: ["GET"], path: "/allowed/*" }] } } });
+  const protectedBody = protectedCreated.json();
+  const protectedHost = new URL(protectedBody.url).host;
+  assert.equal((await app.inject({ method: "GET", url: "/allowed/item", headers: { host: protectedHost } })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: "/denied", headers: { host: protectedHost, "x-ap-access-token": protectedBody.access.token } })).statusCode, 403);
 
   const spoofed = await app.inject({ method: "GET", url: `/c/${channel}/foo`, headers: { host: `${channel}.${baseDomain}.evil.com`, "x-forwarded-host": host } });
   assert.equal(spoofed.statusCode, 404);

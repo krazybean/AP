@@ -9,11 +9,12 @@ const broker = {
   type: "memory" as const,
   health: async () => {},
   metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
-  createChannel: async () => ({ id: channel, secret: "load-test-secret", accessMode: "public" as const }),
+  createChannel: async () => ({ id: channel, secret: "load-test-secret", accessMode: "public" as const, exposureMode: "path" as const }),
   authenticateClient: async (id: string) => { if (id !== channel) throw new Error("CHANNEL_NOT_FOUND"); },
   createClientCredential: async () => ({ id: "load-credential", token: "apc_load", createdAt: Date.now() }),
   revokeClientCredential: async () => {},
   hasChannel: async () => true,
+  channelExposure: async () => "path" as const,
   dispatch: async (id: string) => {
     if (id !== channel) throw new Error("CHANNEL_NOT_FOUND");
     throw new BrokerCapacityError();
