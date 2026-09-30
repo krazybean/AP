@@ -58,6 +58,10 @@ test("GET /metrics reports operational counters", async () => {
     proxyResponses: 0,
     proxyTimeouts: 0,
     brokerErrors: 0,
+    clientAuthSuccesses: 0,
+    clientAuthFailures: 0,
+    clientCredentialsCreated: 0,
+    clientCredentialsRevoked: 0,
     queuedRequests: 0,
     inFlightRequests: 0,
   });

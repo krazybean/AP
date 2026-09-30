@@ -4,7 +4,7 @@ import { registerRoutes } from "./routes.js";
 import { renderStartupBanner } from "./startup-banner.js";
 import { requestBodyLimit } from "./http-config.js";
 
-const app = Fastify({ logger: true, bodyLimit: requestBodyLimit() });
+const app = Fastify({ logger: { redact: ["req.headers.authorization", "req.headers.x-ap-access-token", "req.headers.x-ap-downstream-secret", "req.headers.x-app-license", "req.headers.cookie", "req.headers.set-cookie"] }, bodyLimit: requestBodyLimit() });
 registerRoutes(app);
 
 const port = Number(process.env.PORT ?? 4117);

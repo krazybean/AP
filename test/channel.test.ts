@@ -121,6 +121,9 @@ test("an unanswered downstream request returns 504", async () => {
     dispatch: async () => { throw new Error("DOWNSTREAM_TIMEOUT"); },
     next: async () => null,
     respond: async () => {},
+    authenticateClient: async () => {},
+    createClientCredential: async () => ({ id: "credential", token: "token", createdAt: Date.now() }),
+    revokeClientCredential: async () => {},
   });
   const response = await app.inject({ method: "GET", url: "/c/c0a80101-0000-4000-8000-000000000001" });
   assert.equal(response.statusCode, 504);

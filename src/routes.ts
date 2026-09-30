@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 
-import { BrokerCapacityError, BrokerUnavailableError, type Broker, type DownstreamResponse } from "./broker.js";
+import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 
 function errorMessage(error: unknown) {
@@ -20,7 +20,7 @@ const HOP_BY_HOP = new Set([
   "trailer", "transfer-encoding", "upgrade",
 ]);
 const FORWARDED = new Set(["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]);
-const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length"]);
+const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret"]);
 
 function filteredHeaders(headers: Record<string, string | string[] | undefined>, deny: Set<string>) {
   const blocked = new Set(deny);
@@ -66,6 +66,16 @@ function parseDownstreamResponse(body: unknown): DownstreamResponse | null {
   };
 }
 
+function parseAccess(body: unknown): AccessConfig | null {
+  if (body === undefined || body === null) return { mode: "public" };
+  if (typeof body !== "object" || Array.isArray(body)) return null;
+  const access = (body as Record<string, unknown>).access;
+  if (access === undefined) return { mode: "public" };
+  if (!access || typeof access !== "object" || Array.isArray(access)) return null;
+  const mode = (access as Record<string, unknown>).mode;
+  return mode === "public" || mode === "bearer" ? { mode } : null;
+}
+
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker()) {
   const metrics = {
     channelsCreated: 0,
@@ -74,6 +84,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     proxyResponses: 0,
     proxyTimeouts: 0,
     brokerErrors: 0,
+    clientAuthSuccesses: 0,
+    clientAuthFailures: 0,
+    clientCredentialsCreated: 0,
+    clientCredentialsRevoked: 0,
   };
   let healthAt = 0;
   let healthOk: boolean | undefined;
@@ -136,13 +150,20 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       return reply.code(401).send({ error: "application_license_required" });
     }
 
+    const access = parseAccess(request.body);
+    if (!access) return reply.code(400).send({ error: "invalid_access_configuration" });
+
     try {
-      const { id: channel, secret } = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT);
+      const { id: channel, secret, accessMode, clientCredential } = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT, access);
       metrics.channelsCreated += 1;
       return reply.code(201).send({
         channel,
         secret,
         url: `/c/${channel}`,
+        access: {
+          mode: accessMode,
+          ...(clientCredential ? { credentialId: clientCredential.id, token: clientCredential.token } : {}),
+        },
       });
     } catch (error) {
       if (errorMessage(error) === "CHANNEL_RATE_LIMITED") {
@@ -151,6 +172,42 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       }
       if (brokerUnavailable(error, reply)) return;
       metrics.brokerErrors += 1;
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { channel: string }; Body: { expiresAt?: unknown } }>("/channels/:channel/access-tokens", async (request, reply) => {
+    if (!UUID.test(request.params.channel)) return reply.code(404).send({ error: "channel_not_found" });
+    const rawExpiry = request.body?.expiresAt;
+    const expiresAt = rawExpiry === undefined ? undefined : typeof rawExpiry === "string" ? Date.parse(rawExpiry) : NaN;
+    if (Number.isNaN(expiresAt)) return reply.code(400).send({ error: "invalid_expiration" });
+    try {
+      const credential = await broker.createClientCredential(request.params.channel, downstreamSecret(request.headers), expiresAt);
+      metrics.clientCredentialsCreated += 1;
+      return reply.code(201).send({ credentialId: credential.id, token: credential.token, createdAt: credential.createdAt, ...(credential.expiresAt === undefined ? {} : { expiresAt: new Date(credential.expiresAt).toISOString() }) });
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
+      if (message === "CHANNEL_UNAUTHORIZED") return reply.code(401).send({ error: "channel_unauthorized" });
+      if (message === "CLIENT_CREDENTIAL_LIMIT") return reply.code(429).send({ error: "client_credential_limit" });
+      if (message === "CLIENT_ACCESS_NOT_ENABLED") return reply.code(400).send({ error: "client_access_not_enabled" });
+      if (message === "CLIENT_CREDENTIAL_EXPIRY_INVALID") return reply.code(400).send({ error: "invalid_expiration" });
+      if (brokerUnavailable(error, reply)) return;
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { channel: string; credentialId: string } }>("/channels/:channel/access-tokens/:credentialId", async (request, reply) => {
+    if (!UUID.test(request.params.channel)) return reply.code(404).send({ error: "channel_not_found" });
+    try {
+      await broker.revokeClientCredential(request.params.channel, downstreamSecret(request.headers), request.params.credentialId);
+      metrics.clientCredentialsRevoked += 1;
+      return reply.code(204).send();
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message === "CHANNEL_NOT_FOUND" || message === "CLIENT_CREDENTIAL_NOT_FOUND") return reply.code(404).send({ error: message === "CHANNEL_NOT_FOUND" ? "channel_not_found" : "credential_not_found" });
+      if (message === "CHANNEL_UNAUTHORIZED") return reply.code(401).send({ error: "channel_unauthorized" });
+      if (brokerUnavailable(error, reply)) return;
       throw error;
     }
   });
@@ -222,6 +279,18 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   ) {
     if (!UUID.test(channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
+      try {
+        await broker.authenticateClient(channel, clientAccessToken(request.headers));
+        if (clientAccessToken(request.headers)) metrics.clientAuthSuccesses += 1;
+      } catch (error) {
+        const message = errorMessage(error);
+        if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
+        metrics.clientAuthFailures += 1;
+        if (message === "CLIENT_CREDENTIAL_EXPIRED") return reply.code(401).send({ error: "client_access_expired" });
+        if (message === "CLIENT_CREDENTIAL_INVALID") return reply.code(401).send({ error: "client_access_unauthorized" });
+        if (brokerUnavailable(error, reply)) return;
+        throw error;
+      }
       metrics.proxyRequests += 1;
       const downstream = await broker.dispatch(channel, {
         method: request.method,
@@ -258,5 +327,13 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   function bearerToken(authorization: string | string[] | undefined) {
     if (typeof authorization !== "string") return "";
     return authorization.match(/^Bearer (.+)$/)?.[1] ?? "";
+  }
+
+  function clientAccessToken(headers: Record<string, string | string[] | undefined>) {
+    return typeof headers["x-ap-access-token"] === "string" ? headers["x-ap-access-token"] : "";
+  }
+
+  function downstreamSecret(headers: Record<string, string | string[] | undefined>) {
+    return typeof headers["x-ap-downstream-secret"] === "string" ? headers["x-ap-downstream-secret"] : "";
   }
 }
