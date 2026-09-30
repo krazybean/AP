@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { ChannelBroker } from "../src/channel-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 test("channel proxies a request to a polling downstream", async () => {
@@ -8,7 +9,10 @@ test("channel proxies a request to a polling downstream", async () => {
 
   const created = await app.inject({ method: "POST", url: "/channels" });
   assert.equal(created.statusCode, 201);
-  const { channel, secret } = created.json() as { channel: string; secret: string };
+  const { channel, secret, url } = created.json() as { channel: string; secret: string; url: string };
+  assert.ok(channel);
+  assert.ok(secret);
+  assert.equal(url, `/c/${channel}`);
 
   const publicRequest = app.inject({ method: "GET", url: `/c/${channel}/ping` });
 
@@ -27,15 +31,121 @@ test("channel proxies a request to a polling downstream", async () => {
     method: "POST",
     url: `/channels/${channel}/responses/${pending.id}`,
     headers: { authorization: `Bearer ${secret}` },
-    payload: { statusCode: 200, body: { pong: true } },
+    payload: { statusCode: 201, headers: { "content-type": "application/json", "x-app-result": "ok" }, body: { pong: true } },
   });
   assert.equal(response.statusCode, 202);
 
   const completed = await publicRequest;
-  assert.equal(completed.statusCode, 200);
+  assert.equal(completed.statusCode, 201);
+  assert.match(completed.headers["content-type"], /^application\/json/);
+  assert.equal(completed.headers["x-app-result"], "ok");
   assert.deepEqual(completed.json(), { pong: true });
 
   await app.close();
+});
+
+test("root and nested POST requests preserve paths, headers, and body", async () => {
+  const app = buildTestApp();
+  const created = await app.inject({ method: "POST", url: "/channels" });
+  const { channel, secret } = created.json() as { channel: string; secret: string };
+
+  for (const [url, expectedPath] of [[`/c/${channel}`, "/"], [`/c/${channel}/nested/path`, "/nested/path"]]) {
+    const body = { message: "hello", count: 3 };
+    const publicRequest = app.inject({
+      method: "POST",
+      url,
+      headers: { authorization: "Bearer application-token", "content-type": "application/json", "x-app-trace": "trace-123" },
+      payload: body,
+    });
+    const next = await app.inject({
+      method: "GET",
+      url: `/channels/${channel}/next`,
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    assert.equal(next.statusCode, 200);
+    const pending = next.json() as { id: string; method: string; path: string; headers: Record<string, string>; body: unknown };
+    assert.equal(pending.method, "POST");
+    assert.equal(pending.path, expectedPath);
+    assert.equal(pending.headers.authorization, "Bearer application-token");
+    assert.equal(pending.headers["content-type"], "application/json");
+    assert.equal(pending.headers["x-app-trace"], "trace-123");
+    assert.deepEqual(pending.body, body);
+
+    await app.inject({
+      method: "POST",
+      url: `/channels/${channel}/responses/${pending.id}`,
+      headers: { authorization: `Bearer ${secret}` },
+      payload: { statusCode: 200, body: { received: pending.body } },
+    });
+    const completed = await publicRequest;
+    assert.equal(completed.statusCode, 200);
+    assert.deepEqual(completed.json(), { received: body });
+  }
+  await app.close();
+});
+
+test("empty downstream polling returns 204 and incorrect secret returns 401", async () => {
+  const broker = new ChannelBroker();
+  const { id: channel, secret } = await broker.createChannel();
+  const app = buildTestApp(broker);
+
+  const unauthorized = await app.inject({
+    method: "GET",
+    url: `/channels/${channel}/next`,
+    headers: { authorization: "Bearer incorrect-secret" },
+  });
+  assert.equal(unauthorized.statusCode, 401);
+
+  const emptyBroker = {
+    type: "memory",
+    next: async () => null,
+  } as never;
+  const emptyApp = buildTestApp(emptyBroker);
+  const empty = await emptyApp.inject({
+    method: "GET",
+    url: `/channels/${channel}/next`,
+    headers: { authorization: `Bearer ${secret}` },
+  });
+  assert.equal(empty.statusCode, 204);
+  await app.close();
+  await emptyApp.close();
+});
+
+test("an unanswered downstream request returns 504", async () => {
+  const app = buildTestApp({
+    type: "memory",
+    health: async () => {},
+    metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
+    createChannel: async () => ({ id: "c0a80101-0000-4000-8000-000000000001", secret: "secret" }),
+    hasChannel: async () => true,
+    dispatch: async () => { throw new Error("DOWNSTREAM_TIMEOUT"); },
+    next: async () => null,
+    respond: async () => {},
+  });
+  const response = await app.inject({ method: "GET", url: "/c/c0a80101-0000-4000-8000-000000000001" });
+  assert.equal(response.statusCode, 504);
+  assert.deepEqual(response.json(), { error: "downstream_timeout" });
+  await app.close();
+});
+
+test("late or duplicate responses cannot complete a finished memory request", async () => {
+  const broker = new ChannelBroker();
+  const { id: channel, secret } = await broker.createChannel();
+  const result = broker.dispatch(channel, { method: "GET", path: "/", headers: {}, body: null }, 1_000);
+  const pending = await broker.next(channel, secret, 1_000);
+  assert.ok(pending);
+  const response = { statusCode: 200, body: "first" };
+  await broker.respond(channel, secret, pending.id, response);
+  assert.deepEqual(await result, response);
+  await assert.rejects(broker.respond(channel, secret, pending.id, { statusCode: 200, body: "late" }), /REQUEST_NOT_FOUND/);
+
+  const timedOut = broker.dispatch(channel, { method: "GET", path: "/", headers: {}, body: null }, 1);
+  const expired = await broker.next(channel, secret, 1_000);
+  assert.ok(expired);
+  await assert.rejects(timedOut, /DOWNSTREAM_TIMEOUT/);
+  await assert.rejects(broker.respond(channel, secret, expired.id, { statusCode: 200, body: "too late" }), /REQUEST_NOT_FOUND/);
+  const queued = broker.metrics().queuedRequests + broker.metrics().inFlightRequests;
+  assert.equal(queued, 0);
 });
 
 test("unknown channel traffic returns a not-found error", async () => {
@@ -71,7 +181,7 @@ test("unknown response request returns a not-found error", async () => {
 
   const response = await app.inject({
     method: "POST",
-    url: `/channels/${channel}/responses/not-a-request`,
+    url: `/channels/${channel}/responses/c0a80101-0000-4000-8000-000000000001`,
     headers: { authorization: `Bearer ${secret}` },
     payload: { statusCode: 200, body: { ok: true } },
   });
@@ -103,7 +213,7 @@ test("invalid downstream response envelopes are rejected", async () => {
 
   const response = await app.inject({
     method: "POST",
-    url: `/channels/${channel}/responses/not-a-request`,
+    url: `/channels/${channel}/responses/c0a80101-0000-4000-8000-000000000001`,
     headers: { authorization: `Bearer ${secret}` },
     payload: { statusCode: "200" },
   });

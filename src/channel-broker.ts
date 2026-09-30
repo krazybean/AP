@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import type { Broker, BrokerMetrics, DownstreamResponse, PendingRequest } from "./broker.js";
+import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest } from "./broker.js";
 
 interface PendingExchange {
   request: PendingRequest;
@@ -29,6 +29,8 @@ export class ChannelBroker implements Broker {
   readonly type = "memory" as const;
   private readonly channels = new Map<string, Channel>();
   private readonly creationLimits = new Map<string, CreationLimit>();
+
+  constructor(private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY) {}
 
   async health() {}
 
@@ -77,6 +79,7 @@ export class ChannelBroker implements Broker {
   ): Promise<DownstreamResponse> {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    if (channel.queue.filter((item) => !(item.request as PendingRequest & { delivered?: boolean }).delivered).length >= this.capacity.maxQueuedPerChannel) throw new BrokerCapacityError();
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     return new Promise((resolve, reject) => {
@@ -88,12 +91,12 @@ export class ChannelBroker implements Broker {
         timeout: setTimeout(() => {
           channel.queue = channel.queue.filter((item) => item.request.id !== id);
           reject(new Error("DOWNSTREAM_TIMEOUT"));
+          this.deliver(channel);
         }, timeoutMs),
       };
 
-      const waiter = channel.waiters.shift();
-      if (waiter) waiter(exchange.request);
       channel.queue.push(exchange);
+      this.deliver(channel);
     });
   }
 
@@ -103,7 +106,10 @@ export class ChannelBroker implements Broker {
     if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
-    const next = channel.queue.find((item) => !(item.request as PendingRequest & { delivered?: boolean }).delivered);
+    const inFlight = channel.queue.filter((item) => (item.request as PendingRequest & { delivered?: boolean }).delivered).length;
+    const next = inFlight < this.capacity.maxInFlightPerChannel
+      ? channel.queue.find((item) => !(item.request as PendingRequest & { delivered?: boolean }).delivered)
+      : undefined;
     if (next) {
       (next.request as PendingRequest & { delivered?: boolean }).delivered = true;
       return next.request;
@@ -111,7 +117,6 @@ export class ChannelBroker implements Broker {
 
     return new Promise((resolve) => {
       const waiter = (request: PendingRequest | null) => {
-        if (request) (request as PendingRequest & { delivered?: boolean }).delivered = true;
         resolve(request);
       };
       channel.waiters.push(waiter);
@@ -130,11 +135,12 @@ export class ChannelBroker implements Broker {
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const index = channel.queue.findIndex((item) => item.request.id === requestId);
-    if (index < 0) throw new Error("REQUEST_NOT_FOUND");
+    if (index < 0 || !(channel.queue[index].request as PendingRequest & { delivered?: boolean }).delivered) throw new Error("REQUEST_NOT_FOUND");
 
     const [exchange] = channel.queue.splice(index, 1);
     clearTimeout(exchange.timeout);
     exchange.resolve(response);
+    this.deliver(channel);
   }
 
   private getChannel(id: string) {
@@ -144,5 +150,14 @@ export class ChannelBroker implements Broker {
       return undefined;
     }
     return channel;
+  }
+
+  private deliver(channel: Channel) {
+    while (channel.waiters.length && channel.queue.filter((item) => (item.request as PendingRequest & { delivered?: boolean }).delivered).length < this.capacity.maxInFlightPerChannel) {
+      const next = channel.queue.find((item) => !(item.request as PendingRequest & { delivered?: boolean }).delivered);
+      if (!next) return;
+      (next.request as PendingRequest & { delivered?: boolean }).delivered = true;
+      channel.waiters.shift()!(next.request);
+    }
   }
 }

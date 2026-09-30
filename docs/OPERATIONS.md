@@ -16,7 +16,37 @@ The in-memory broker is process-local. It is not safe as a horizontally scaled/s
 
 `GET /health` checks the configured broker. A healthy response is HTTP `200` with `broker: "ok"` and `brokerType` set to `memory` or `redis`. Redis or broker failure returns HTTP `503` with `status: "degraded"`.
 
+Broker health results are cached for at most one second, including failures, to limit Redis work during health-check bursts. Concurrent checks share one broker operation.
+
 `GET /metrics` reports process-local counters for channel creation, rate limiting, proxy traffic, timeouts, broker errors, queued requests, and in-flight requests. The Redis broker additionally reports `redisCommands` and `redisPollCommands`. These counters reset when the process restarts; Redis-global aggregation is intentionally not implemented.
+
+In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRICS_TOKEN` is set and the request includes `Authorization: Bearer <token>`. Keep this token secret; if unset, metrics are disabled.
+
+## HTTP boundary
+
+`AP_REQUEST_BODY_LIMIT_BYTES` sets Fastify's maximum request body size in bytes. It defaults to `1048576` (1 MiB); set a positive integer appropriate for the largest expected application payload. Invalid values stop startup.
+
+Broker pressure limits default to `AP_BROKER_MAX_QUEUED_PER_CHANNEL=100` and `AP_BROKER_MAX_IN_FLIGHT_PER_CHANNEL=20`. They apply per channel; Redis enforces them across AP instances. Channel creation limits use process-local state in memory mode and shared Redis counters in Redis mode. AP has no global request-rate limiter; configure an upstream edge/WAF control for internet-facing abuse protection.
+
+## Edge/WAF deployment gate
+
+The repository does not deploy a distributed edge limiter. Configure this before internet exposure, using the platform's source-aware controls:
+
+| Route | Required policy |
+|---|---|
+| `/channels` | Strict anonymous/source rate limit and burst cap |
+| `/c/*` | General request rate limit plus per-source burst cap |
+| malformed/random `/c/*` probes | Reject or throttle before Redis invocation where the platform supports it |
+| `/health` | Permit monitoring, cap abusive volume |
+| `/metrics` | Keep application bearer protection; WAF is additional defense |
+
+Verify the rules in the Vercel/provider dashboard and record deployment evidence. Do not describe these rules as deployed until that external step is complete. GitHub secret scanning and dependency-review settings are likewise repository-owner controls that must be enabled in GitHub settings when available.
+
+When either per-channel capacity is full, public channel requests receive HTTP `429` with `Retry-After: 1` and `error: "channel_capacity_exceeded"`; clients should use backoff because that delay is a retry hint, not a guarantee that capacity has freed.
+
+Channel and request path identifiers must be canonical UUID v4 values; malformed identifiers return `404` without broker access. AP removes standard hop-by-hop headers, headers named by `Connection`, inbound forwarding metadata, `Host`, and `Content-Length` before dispatch. Downstream `Set-Cookie`, hop-by-hop, and forwarding headers are not returned to the browser. Safe application headers and bodies continue through the proxy. Downstream responses are accepted only after `/next` has delivered their request; queued, late, and duplicate response IDs return `404`.
+
+AP's channel URLs still act as capability addresses; this pass does not add client authorization. Channels also share AP's browser origin, so downstream browser content can still pose cross-channel risks through mechanisms other than cookies. A later security wave should add explicit client authorization and channel origin isolation. Per-channel capacity and channel-creation controls do not replace an upstream edge/WAF rate limiter, especially on serverless platforms.
 
 ## Redis command budget
 
@@ -28,15 +58,15 @@ Approximate command budgets after the hardening pass are:
 | --- | ---: |
 | First channel creation in a rate-limit bucket | 3 |
 | Subsequent channel creation in the same bucket | 2 |
-| Idle 25 s downstream `/next` poll | ~12 |
-| Dispatch setup before waiting | 5 |
+| Idle 25 s downstream `/next` poll | ~11 |
+| Dispatch admission before waiting | 1 atomic Lua call |
 | Response wait for 5 s | ~6 polling GETs |
 | Response wait for 15 s | ~8 polling GETs |
 | Response wait for 30 s | ~11 polling GETs |
-| Downstream response submission | 5 |
-| Timeout cleanup | 2 |
+| Downstream response submission | 3 |
+| Timeout cleanup | 1 atomic Lua call; 1 additional read only if a response wins the timeout race |
 
-The previous 100 ms polling path consumed roughly 253 commands for one idle 25 s `/next` request and roughly 50/150/300 response-key GETs for 5/15/30 second waits.
+The previous 100 ms polling path consumed roughly 253 commands for one idle 25 s `/next` request and roughly 50/150/300 response-key GETs for 5/15/30 second waits. Current capacity transitions are atomic Redis scripts; each counts as one command.
 
 ## Redis outage or quota exhaustion
 

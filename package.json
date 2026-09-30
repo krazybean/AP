@@ -12,7 +12,9 @@
     "start": "tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts",
-    "mock:downstream": "tsx scripts/mock-downstream.ts"
+    "mock:downstream": "tsx scripts/mock-downstream.ts",
+    "security:scan": "node scripts/secret-scan.mjs",
+    "security:load": "node --import tsx scripts/security-load.ts"
   },
   "dependencies": {
     "fastify": "^5.6.0",
