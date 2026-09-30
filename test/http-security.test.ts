@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Broker } from "../src/broker.js";
+import { BrokerCapacityError, type Broker } from "../src/broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 const validId = "c0a80101-0000-4000-8000-000000000001";
@@ -34,6 +34,16 @@ test("malformed channel and request UUIDs return 404 before broker access", asyn
     assert.equal((await app.inject({ method: url.includes("responses") ? "POST" : "GET", url, payload: {} })).statusCode, 404);
   }
   assert.equal(broker.calls, 0);
+  await app.close();
+});
+
+test("channel capacity exhaustion returns a bounded retry response", async () => {
+  const broker = stubBroker({ dispatch: async () => { throw new BrokerCapacityError(); } });
+  const app = buildTestApp(broker);
+  const response = await app.inject({ method: "GET", url: `/c/${validId}` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers["retry-after"], "1");
+  assert.deepEqual(response.json(), { error: "channel_capacity_exceeded" });
   await app.close();
 });
 

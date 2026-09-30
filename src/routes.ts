@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 
-import { BrokerUnavailableError, type Broker, type DownstreamResponse } from "./broker.js";
+import { BrokerCapacityError, BrokerUnavailableError, type Broker, type DownstreamResponse } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 
 function errorMessage(error: unknown) {
@@ -239,6 +239,9 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       return reply.code(downstream.statusCode ?? 200).send(downstream.body);
     } catch (error) {
       const message = errorMessage(error);
+      if (error instanceof BrokerCapacityError) {
+        return reply.header("retry-after", "1").code(429).send({ error: "channel_capacity_exceeded" });
+      }
       if (message === "CHANNEL_NOT_FOUND") {
         return reply.code(404).send({ error: "channel_not_found" });
       }

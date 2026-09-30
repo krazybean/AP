@@ -20,10 +20,15 @@ This is the engineering-maturity backlog, separate from product features.
 - [x] Add an opt-in real Redis round-trip test.
 - [x] Run the Redis round-trip test against the attached Upstash environment.
 - [x] Add opt-in Redis integration tests for delivery, timeout, expiry, and restart behavior.
+- [x] Bound per-channel queued and in-flight work with shared Redis capacity state.
+- [x] Validate public broker identifiers before Redis access and sanitize proxy request/response headers.
+- [x] Limit request body size, protect production metrics, and cache broker health probes briefly.
 
 ## AV-2 — Product Gate
 
 - [ ] Add authentication and authorization for channel creation and channel traffic.
+- [ ] Separate channel identity from client authorization; channel URLs remain capability addresses.
+- [ ] Isolate channel browser origins before supporting mutually untrusted browser content.
 - [x] Add prototype rate limiting for channel creation per source IP.
 - [ ] Consider application license identity as a stronger limiter key if source-IP limiting becomes insufficient.
 - [x] Enforce a 15-minute inactivity expiry consistently in local and Redis brokers.
