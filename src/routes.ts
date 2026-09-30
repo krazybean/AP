@@ -146,7 +146,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   async function brokerHealthy() {
     if (healthOk !== undefined && Date.now() - healthAt < HEALTH_CACHE_MS) return healthOk;
     healthCheck ??= broker.health().then(() => true, (error) => {
-      app.log.error(error, "AP health check failed");
+      app.log.error({ event: "broker.health_failed" }, "AP health check failed");
       return false;
     });
     const result = await healthCheck;

@@ -52,10 +52,11 @@ test("audit events use a fixed schema and never contain request secrets", async 
 test("every response has a generated correlation ID and audits reuse it", async () => {
   const events: SecurityAuditEvent[] = [];
   const app = appWithSink(events);
-  const response = await app.inject({ method: "POST", url: "/channels", headers: { "x-ap-request-id": "attacker\nforged" } });
+  const response = await app.inject({ method: "POST", url: "/channels", headers: { "x-ap-request-id": `${"x".repeat(1000)}\nforged` } });
   const requestId = response.headers["x-ap-request-id"];
   assert.equal(typeof requestId, "string");
-  assert.notEqual(requestId, "attacker\nforged");
+  assert.ok(requestId.length < 128);
+  assert.equal(/[\u0000-\u001f\u007f]/.test(requestId), false);
   assert.equal(events.at(-1)?.requestId, requestId);
   await app.close();
 });
@@ -68,7 +69,9 @@ test("telemetry failure cannot change authentication or authorization decisions"
   const body = created.json();
   assert.equal((await app.inject({ method: "GET", url: `/c/${body.channel}/denied`, headers: { "x-ap-access-token": body.access.token } })).statusCode, 403);
   assert.equal((await app.inject({ method: "GET", url: `/c/${body.channel}/allowed` })).statusCode, 401);
-  assert.equal((await app.inject({ method: "GET", url: "/metrics" })).statusCode, 200);
+  const metrics = await app.inject({ method: "GET", url: "/metrics" });
+  assert.equal(metrics.statusCode, 200);
+  assert.ok(metrics.json().security.auditEmissionFailures >= 1);
   await app.close();
 });
 
