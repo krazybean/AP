@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse } from "./broker.js";
 import { createBroker } from "./create-broker.js";
+import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "";
@@ -73,7 +74,14 @@ function parseAccess(body: unknown): AccessConfig | null {
   if (access === undefined) return { mode: "public" };
   if (!access || typeof access !== "object" || Array.isArray(access)) return null;
   const mode = (access as Record<string, unknown>).mode;
-  return mode === "public" || mode === "bearer" ? { mode } : null;
+  if (mode !== "public" && mode !== "bearer") return null;
+  try {
+    const scopes = validateScopes((access as Record<string, unknown>).scopes);
+    if (mode === "public" && scopes) return null;
+    return { mode, ...(scopes ? { scopes } : {}) };
+  } catch {
+    return null;
+  }
 }
 
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker()) {
@@ -86,6 +94,9 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     brokerErrors: 0,
     clientAuthSuccesses: 0,
     clientAuthFailures: 0,
+    authorizationAllowed: 0,
+    authorizationDenied: 0,
+    invalidScopeConfigurations: 0,
     clientCredentialsCreated: 0,
     clientCredentialsRevoked: 0,
   };
@@ -151,7 +162,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
 
     const access = parseAccess(request.body);
-    if (!access) return reply.code(400).send({ error: "invalid_access_configuration" });
+    if (!access) {
+      metrics.invalidScopeConfigurations += 1;
+      return reply.code(400).send({ error: "invalid_access_configuration" });
+    }
 
     try {
       const { id: channel, secret, accessMode, clientCredential } = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT, access);
@@ -162,6 +176,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         url: `/c/${channel}`,
         access: {
           mode: accessMode,
+          ...(clientCredential?.scopes ? { scopes: clientCredential.scopes } : {}),
           ...(clientCredential ? { credentialId: clientCredential.id, token: clientCredential.token } : {}),
         },
       });
@@ -176,15 +191,22 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
   });
 
-  app.post<{ Params: { channel: string }; Body: { expiresAt?: unknown } }>("/channels/:channel/access-tokens", async (request, reply) => {
+  app.post<{ Params: { channel: string }; Body: { expiresAt?: unknown; scopes?: unknown } }>("/channels/:channel/access-tokens", async (request, reply) => {
     if (!UUID.test(request.params.channel)) return reply.code(404).send({ error: "channel_not_found" });
     const rawExpiry = request.body?.expiresAt;
     const expiresAt = rawExpiry === undefined ? undefined : typeof rawExpiry === "string" ? Date.parse(rawExpiry) : NaN;
     if (Number.isNaN(expiresAt)) return reply.code(400).send({ error: "invalid_expiration" });
+    let scopes;
     try {
-      const credential = await broker.createClientCredential(request.params.channel, downstreamSecret(request.headers), expiresAt);
+      scopes = validateScopes(request.body?.scopes);
+    } catch {
+      metrics.invalidScopeConfigurations += 1;
+      return reply.code(400).send({ error: "invalid_scopes" });
+    }
+    try {
+      const credential = await broker.createClientCredential(request.params.channel, downstreamSecret(request.headers), expiresAt, scopes);
       metrics.clientCredentialsCreated += 1;
-      return reply.code(201).send({ credentialId: credential.id, token: credential.token, createdAt: credential.createdAt, ...(credential.expiresAt === undefined ? {} : { expiresAt: new Date(credential.expiresAt).toISOString() }) });
+      return reply.code(201).send({ credentialId: credential.id, token: credential.token, createdAt: credential.createdAt, ...(credential.expiresAt === undefined ? {} : { expiresAt: new Date(credential.expiresAt).toISOString() }), ...(credential.scopes ? { scopes: credential.scopes } : {}) });
     } catch (error) {
       const message = errorMessage(error);
       if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
@@ -264,11 +286,11 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   });
 
   app.all<{ Params: { channel: string; "*": string } }>("/c/:channel/*", async (request, reply) => {
-    return proxyToChannel(request.params.channel, `/${request.params["*"]}`, request, reply);
+    return proxyToChannel(request.params.channel, requestPath(request.url, request.params.channel, `/${request.params["*"]}`), request, reply);
   });
 
   app.all<{ Params: { channel: string } }>("/c/:channel", async (request, reply) => {
-    return proxyToChannel(request.params.channel, "/", request, reply);
+    return proxyToChannel(request.params.channel, requestPath(request.url, request.params.channel, "/"), request, reply);
   });
 
   async function proxyToChannel(
@@ -279,9 +301,25 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   ) {
     if (!UUID.test(channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
+      let dispatchPath = path;
       try {
-        await broker.authenticateClient(channel, clientAccessToken(request.headers));
+        const authenticated = await broker.authenticateClient(channel, clientAccessToken(request.headers));
         if (clientAccessToken(request.headers)) metrics.clientAuthSuccesses += 1;
+        if (authenticated?.scopes) {
+          let applicationPath: string;
+          try {
+            applicationPath = canonicalApplicationPath(path);
+          } catch {
+            metrics.authorizationDenied += 1;
+            return reply.code(400).send({ error: "ambiguous_path" });
+          }
+          if (!scopeAllows(authenticated.scopes, request.method, applicationPath)) {
+            metrics.authorizationDenied += 1;
+            return reply.code(403).send({ error: "client_access_forbidden" });
+          }
+          dispatchPath = canonicalDispatchPath(path);
+          metrics.authorizationAllowed += 1;
+        }
       } catch (error) {
         const message = errorMessage(error);
         if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
@@ -294,7 +332,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       metrics.proxyRequests += 1;
       const downstream = await broker.dispatch(channel, {
         method: request.method,
-        path,
+        path: dispatchPath,
         headers: filteredHeaders(request.headers, INBOUND_DENY),
         body: request.body,
       });
@@ -335,5 +373,11 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
 
   function downstreamSecret(headers: Record<string, string | string[] | undefined>) {
     return typeof headers["x-ap-downstream-secret"] === "string" ? headers["x-ap-downstream-secret"] : "";
+  }
+
+  function requestPath(url: string, channel: string, fallback: string) {
+    const suffix = url.slice(`/c/${channel}`.length);
+    if (!suffix) return fallback;
+    return suffix.startsWith("?") ? `/${suffix}` : suffix;
   }
 }

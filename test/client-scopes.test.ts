@@ -52,6 +52,11 @@ test("exact and subtree scopes enforce method and application path", async () =>
 
   const subtree = await protectedChannel(app, [{ methods: ["GET"], path: "/projects/*" }]);
   assert.equal((await roundTrip(app, subtree.channel, subtree.secret, subtree.access.token, "GET", `/c/${subtree.channel}/projects/1`)).statusCode, 200);
+  const queryRequest = app.inject({ method: "GET", url: `/c/${subtree.channel}/projects/1?view=full`, headers: { "x-ap-access-token": subtree.access.token } });
+  const queryPending = await app.inject({ method: "GET", url: `/channels/${subtree.channel}/next`, headers: { authorization: `Bearer ${subtree.secret}` } });
+  assert.equal(queryPending.json().path, "/projects/1?view=full");
+  await app.inject({ method: "POST", url: `/channels/${subtree.channel}/responses/${queryPending.json().id}`, headers: { authorization: `Bearer ${subtree.secret}` }, payload: { statusCode: 200 } });
+  assert.equal((await queryRequest).statusCode, 200);
   assert.equal((await app.inject({ method: "GET", url: `/c/${subtree.channel}/projects`, headers: { "x-ap-access-token": subtree.access.token } })).statusCode, 403);
   await app.close();
 });
