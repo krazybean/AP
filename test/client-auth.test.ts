@@ -66,8 +66,12 @@ test("credential lifecycle supports rotation, revocation, expiry, and a bounded 
   const second = await broker.createClientCredential(created.id, created.secret);
   assert.equal(await broker.authenticateClient(created.id, created.clientCredential!.token), undefined);
   assert.equal(await broker.authenticateClient(created.id, second.token), undefined);
+  await assert.rejects(() => broker.authenticateClient(created.id, created.secret), /CLIENT_CREDENTIAL_INVALID/);
+  await assert.rejects(() => broker.authenticateClient(created.id, "apc_短"), /CLIENT_CREDENTIAL_INVALID/);
+  await assert.rejects(() => broker.next(created.id, created.clientCredential!.token, 0), /CHANNEL_UNAUTHORIZED/);
   await broker.revokeClientCredential(created.id, created.secret, second.id);
   await assert.rejects(() => broker.authenticateClient(created.id, second.token), /CLIENT_CREDENTIAL_INVALID/);
+  await assert.rejects(() => broker.revokeClientCredential(created.id, created.secret, second.id), /CLIENT_CREDENTIAL_NOT_FOUND/);
   const expired = await broker.createClientCredential(created.id, created.secret, Date.now() + 5);
   await new Promise((resolve) => setTimeout(resolve, 10));
   await assert.rejects(() => broker.authenticateClient(created.id, expired.token), /CLIENT_CREDENTIAL_EXPIRED/);
