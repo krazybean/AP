@@ -29,6 +29,28 @@ AP returns HTTP `201`:
 }
 ```
 
+Omitting `access` preserves the public-channel behavior. To create a protected channel, request bearer client access explicitly:
+
+```http
+POST /channels
+Content-Type: application/json
+
+{"access":{"mode":"bearer"}}
+```
+
+The response includes the downstream `secret` and one raw client token:
+
+```json
+{
+  "channel": "...",
+  "secret": "<downstream channel secret>",
+  "url": "/c/...",
+  "access": { "mode": "bearer", "credentialId": "...", "token": "apc_<random-token>" }
+}
+```
+
+The raw `apc_` token is returned only at creation. Store it in the public client that is allowed to use the channel; AP stores only a SHA-256 digest. `X-AP-Access-Token` authorizes public channel traffic and is never forwarded downstream. The ordinary `Authorization` header remains application data and is forwarded unchanged when present.
+
 Retain `channel` and `secret` for the uplink loop. The absolute public URL is the AP origin plus `url`. Keep the secret private; it authorizes downstream polling and response delivery.
 
 ## 2. Poll for public requests
@@ -113,6 +135,36 @@ The client starts there. It should be able to read the APP landing page, discove
 
 The AI does **not** need to know about `/channels`, polling, Redis, or the private application's network location.
 
+For a protected channel, public requests include:
+
+```http
+X-AP-Access-Token: apc_<client-token>
+Authorization: Bearer <downstream-application-token>
+```
+
+Missing, invalid, revoked, or expired client tokens receive HTTP `401`. Public channels do not require `X-AP-Access-Token`.
+
+## Client credential lifecycle
+
+The downstream owner can create and revoke additional bearer credentials without introducing a user-account system:
+
+```http
+POST /channels/{channel}/access-tokens
+X-AP-Downstream-Secret: <downstream channel secret>
+Content-Type: application/json
+
+{"expiresAt":"2030-01-01T00:00:00.000Z"}
+```
+
+Revocation uses:
+
+```http
+DELETE /channels/{channel}/access-tokens/{credentialId}
+X-AP-Downstream-Secret: <downstream channel secret>
+```
+
+The control header is deliberately separate from ordinary `Authorization`, which remains reserved for downstream application semantics and the existing polling/response transport. At most 10 active credentials are retained per channel. Credential metadata endpoints never return raw tokens or digests.
+
 ## Minimal loop
 
 Pseudocode:
@@ -165,7 +217,7 @@ Keep the AP adapter thin. Application capabilities belong behind the application
 
 Keep channel identity separate from the polling transport. The current implementation polls, but applications should not design their domain model around polling being permanent.
 
-Do not expose secrets in the APP landing page or capability responses. Channel creation remains public in the prototype; the returned secret protects downstream polling and response delivery, while public AI-facing traffic remains reachable through the channel URL.
+Do not expose secrets in the APP landing page or capability responses. Channel creation remains public in the prototype; public channels remain reachable through the channel URL, while protected channels additionally require the AP client token. The downstream secret protects polling, responses, and credential control.
 
 ## Current lifecycle limitation
 

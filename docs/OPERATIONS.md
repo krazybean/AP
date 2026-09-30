@@ -18,7 +18,7 @@ The in-memory broker is process-local. It is not safe as a horizontally scaled/s
 
 Broker health results are cached for at most one second, including failures, to limit Redis work during health-check bursts. Concurrent checks share one broker operation.
 
-`GET /metrics` reports process-local counters for channel creation, rate limiting, proxy traffic, timeouts, broker errors, queued requests, and in-flight requests. The Redis broker additionally reports `redisCommands` and `redisPollCommands`. These counters reset when the process restarts; Redis-global aggregation is intentionally not implemented.
+`GET /metrics` reports process-local counters for channel creation, rate limiting, proxy traffic, timeouts, broker errors, client authentication, credential creation/revocation, queued requests, and in-flight requests. The Redis broker additionally reports `redisCommands` and `redisPollCommands`. These counters reset when the process restarts; Redis-global aggregation is intentionally not implemented.
 
 In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRICS_TOKEN` is set and the request includes `Authorization: Bearer <token>`. Keep this token secret; if unset, metrics are disabled.
 
@@ -47,6 +47,16 @@ When either per-channel capacity is full, public channel requests receive HTTP `
 Channel and request path identifiers must be canonical UUID v4 values; malformed identifiers return `404` without broker access. AP removes standard hop-by-hop headers, headers named by `Connection`, inbound forwarding metadata, `Host`, and `Content-Length` before dispatch. Downstream `Set-Cookie`, hop-by-hop, and forwarding headers are not returned to the browser. Safe application headers and bodies continue through the proxy. Downstream responses are accepted only after `/next` has delivered their request; queued, late, and duplicate response IDs return `404`.
 
 AP's channel URLs still act as capability addresses; this pass does not add client authorization. Channels also share AP's browser origin, so downstream browser content can still pose cross-channel risks through mechanisms other than cookies. A later security wave should add explicit client authorization and channel origin isolation. Per-channel capacity and channel-creation controls do not replace an upstream edge/WAF rate limiter, especially on serverless platforms.
+
+## Client authorization
+
+Channel identity is separate from public-client authorization:
+
+- `channel` identifies the destination.
+- The downstream secret proves private application ownership/control.
+- `X-AP-Access-Token: apc_<random-token>` authorizes a public caller on protected bearer channels.
+
+Omitted `access` on channel creation means `public` for compatibility. Explicit `access.mode=bearer` creates a protected channel and returns the initial raw token once. Tokens are SHA-256 digested, support expiry/revocation, and are limited to 10 active credentials per channel. AP never consumes or forwards the ordinary application `Authorization` header for client access; it strips `X-AP-Access-Token` before downstream dispatch. Owner credential control uses `X-AP-Downstream-Secret`.
 
 ## Redis command budget
 
