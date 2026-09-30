@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { ChannelBroker } from "../src/channel-broker.js";
+import { buildTestApp } from "./build-test-app.js";
+
+const validId = "c0a80101-0000-4000-8000-000000000001";
+
+test("public channels preserve the existing proxy contract", async () => {
+  const broker = new ChannelBroker();
+  const created = await broker.createChannel();
+  const app = buildTestApp(broker);
+  const request = app.inject({ method: "GET", url: `/c/${created.id}/projects`, headers: { authorization: "Bearer app" } });
+  const pending = await broker.next(created.id, created.secret, 0);
+  assert.ok(pending);
+  await broker.respond(created.id, created.secret, pending.id, { statusCode: 200, body: "ok" });
+  assert.equal((await request).statusCode, 200);
+  await app.close();
+});
+
+test("protected creation returns a one-time client token and rejects unauthenticated traffic", async () => {
+  const app = buildTestApp(new ChannelBroker());
+  const created = await app.inject({ method: "POST", url: "/channels", payload: { access: { mode: "bearer" } } });
+  assert.equal(created.statusCode, 201);
+  const body = created.json();
+  assert.equal(body.access.mode, "bearer");
+  assert.match(body.access.token, /^apc_[A-Za-z0-9_-]{43}$/);
+  assert.equal((await app.inject({ method: "GET", url: `/c/${body.channel}` })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: `/c/${body.channel}`, headers: { "x-ap-access-token": body.access.token } })).statusCode, 504);
+  await app.close();
+});
+
+test("AP access token is separate from downstream Authorization and is not forwarded", async () => {
+  let headers: Record<string, string | string[] | undefined> | undefined;
+  const broker = new ChannelBroker();
+  const originalDispatch = broker.dispatch.bind(broker);
+  const created = await broker.createChannel();
+  const app = buildTestApp({
+    ...broker,
+    dispatch: async (id: string, request: { headers: Record<string, string | string[] | undefined> }) => {
+      headers = request.headers;
+      return originalDispatch(id, { method: "GET", path: "/", headers: request.headers, body: undefined }, 1);
+    },
+  } as never);
+  assert.equal((await app.inject({
+    method: "GET", url: `/c/${created.id}`, headers: {
+      "x-ap-access-token": "apc_test", authorization: "Bearer app",
+    },
+  })).statusCode, 504);
+  assert.equal(headers?.authorization, "Bearer app");
+  assert.equal(headers?.["x-ap-access-token"], undefined);
+  await app.close();
+});
+
+test("credential lifecycle supports rotation, revocation, expiry, and a bounded limit", async () => {
+  const broker = new ChannelBroker();
+  const created = await broker.createChannel("test", 10, { mode: "bearer" });
+  const second = await broker.createClientCredential(created.id, created.secret);
+  assert.equal(await broker.authenticateClient(created.id, created.clientToken), true);
+  assert.equal(await broker.authenticateClient(created.id, second.token), true);
+  await broker.revokeClientCredential(created.id, created.secret, second.id);
+  await assert.rejects(() => broker.authenticateClient(created.id, second.token), /CLIENT_CREDENTIAL_INVALID/);
+  const expired = await broker.createClientCredential(created.id, created.secret, Date.now() - 1);
+  await assert.rejects(() => broker.authenticateClient(created.id, expired.token), /CLIENT_CREDENTIAL_EXPIRED/);
+  await assert.rejects(() => broker.createClientCredential(created.id, created.secret, undefined, 0), /CLIENT_CREDENTIAL_LIMIT/);
+  assert.notEqual(created.clientToken, created.secret);
+  assert.equal(await broker.authenticateClient(validId, created.clientToken).catch(() => false), false);
+});
