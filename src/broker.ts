@@ -21,6 +21,15 @@ export interface BrokerMetrics {
 
 export interface BrokerCapacity { maxQueuedPerChannel: number; maxInFlightPerChannel: number }
 export const DEFAULT_BROKER_CAPACITY: BrokerCapacity = { maxQueuedPerChannel: 100, maxInFlightPerChannel: 20 };
+export type AccessMode = "public" | "bearer";
+export interface AccessConfig { mode: AccessMode }
+export interface CreatedChannel {
+  id: string;
+  secret: string;
+  accessMode: AccessMode;
+  clientCredential?: import("./client-credentials.js").CreatedClientCredential;
+}
+export type ClientCredential = import("./client-credentials.js").CreatedClientCredential;
 
 export class BrokerUnavailableError extends Error {
   constructor(message = "BROKER_UNAVAILABLE", readonly retryAfterSeconds?: number, options?: ErrorOptions) {
@@ -40,7 +49,10 @@ export interface Broker {
   readonly type: "memory" | "redis";
   health(): Promise<void>;
   metrics(): BrokerMetrics;
-  createChannel(rateLimitKey?: string, limit?: number): Promise<{ id: string; secret: string }>;
+  createChannel(rateLimitKey?: string, limit?: number, access?: AccessConfig): Promise<CreatedChannel>;
+  authenticateClient(channelId: string, token: string): Promise<void>;
+  createClientCredential(channelId: string, secret: string, expiresAt?: number): Promise<ClientCredential>;
+  revokeClientCredential(channelId: string, secret: string, credentialId: string): Promise<void>;
   hasChannel(id: string): Promise<boolean>;
   dispatch(
     channelId: string,

@@ -22,6 +22,9 @@ function stubBroker(overrides: Partial<Broker> = {}) {
     },
     next: async () => null,
     respond: async () => {},
+    authenticateClient: async () => {},
+    createClientCredential: async () => ({ id: "credential", token: "token", createdAt: Date.now() }),
+    revokeClientCredential: async () => {},
     ...overrides,
   } as Broker & { calls: number; lastHeaders?: Record<string, string | string[] | undefined> };
   Object.defineProperty(broker, "calls", { get: () => calls });

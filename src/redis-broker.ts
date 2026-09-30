@@ -12,6 +12,7 @@ import {
   type DownstreamResponse,
   type PendingRequest,
 } from "./broker.js";
+import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, type ClientCredentialMetadata } from "./client-credentials.js";
 
 const CHANNEL_TTL_SECONDS = 15 * 60;
 const RESPONSE_TTL_SECONDS = CHANNEL_TTL_SECONDS;
@@ -40,6 +41,14 @@ const CANCEL = `-- ap:cancel
 local state = redis.call('GET', KEYS[1]); if not state then if redis.call('EXISTS', KEYS[4]) == 1 then return 2 else return 0 end end
 if state == 'q' then redis.call('LREM', KEYS[2], 1, ARGV[1]); redis.call('HINCRBY', KEYS[3], 'q', -1) else redis.call('HINCRBY', KEYS[3], 'f', -1) end
 redis.call('DEL', KEYS[1]); redis.call('EXPIRE', KEYS[3], ARGV[2]); return 1`;
+const CREATE_CLIENT = `-- ap:create-client
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+if redis.call('HGET', KEYS[2], 'mode') ~= 'bearer' then return -2 end
+local count = tonumber(redis.call('HGET', KEYS[2], 'count') or '0'); for _, key in ipairs(redis.call('HKEYS', KEYS[2])) do if string.sub(key, 1, 2) == 'c:' then local item = cjson.decode(redis.call('HGET', KEYS[2], key)); if item.expiresAt and item.expiresAt <= tonumber(ARGV[6]) then redis.call('HDEL', KEYS[2], key, 'd:' .. item.digest); count = count - 1 end end end; redis.call('HSET', KEYS[2], 'count', count); if count >= tonumber(ARGV[3]) then return 0 end
+redis.call('HSET', KEYS[2], 'c:' .. ARGV[1], ARGV[2], 'd:' .. ARGV[4], ARGV[2]); redis.call('HINCRBY', KEYS[2], 'count', 1); redis.call('EXPIRE', KEYS[2], ARGV[5]); return 1`;
+const REVOKE_CLIENT = `-- ap:revoke-client
+local record = redis.call('HGET', KEYS[1], 'c:' .. ARGV[1]); if not record then return 0 end
+local parsed = cjson.decode(record); redis.call('HDEL', KEYS[1], 'c:' .. ARGV[1], 'd:' .. parsed.digest); redis.call('HINCRBY', KEYS[1], 'count', -1); return 1`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -92,7 +101,7 @@ export class RedisBroker implements Broker {
     };
   }
 
-  async createChannel(rateLimitKey = "default", limit = 10) {
+  async createChannel(rateLimitKey = "default", limit = 10, access = { mode: "public" as const }) {
     const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
     const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}:${bucket}`;
     const count = await this.command(() => this.redis.incr(rateLimitKeyName));
@@ -103,8 +112,47 @@ export class RedisBroker implements Broker {
 
     const id = randomUUID();
     const secret = randomBytes(32).toString("base64url");
-    await this.command(() => this.redis.set(this.channelKey(id), secret, { ex: CHANNEL_TTL_SECONDS }));
-    return { id, secret };
+    await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secret, accessMode: access.mode }), { ex: CHANNEL_TTL_SECONDS }));
+    if (access.mode === "public") return { id, secret, accessMode: "public" as const };
+    await this.command(() => this.redis.hset(this.accessKey(id), { mode: "bearer", count: 0 }));
+    await this.command(() => this.redis.expire(this.accessKey(id), CHANNEL_TTL_SECONDS));
+    const clientCredential = await this.createClientCredential(id, secret);
+    return { id, secret, accessMode: "bearer" as const, clientCredential };
+  }
+
+  async authenticateClient(channelId: string, token: string) {
+    const stored = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
+    if (stored === null) throw new Error("CHANNEL_NOT_FOUND");
+    const channel = this.parseChannel(stored);
+    if (channel.accessMode !== "bearer") return;
+    const record = await this.command(() => this.redis.hget<string>(this.accessKey(channelId), `d:${digestToken(token).toString("hex")}`));
+    if (!record) throw new Error("CLIENT_CREDENTIAL_INVALID");
+    const metadata = JSON.parse(record) as ClientCredentialMetadata & { digest: string };
+    if (metadata.expiresAt !== undefined && metadata.expiresAt <= Date.now()) throw new Error("CLIENT_CREDENTIAL_EXPIRED");
+    await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
+    await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
+  }
+
+  async createClientCredential(channelId: string, secret: string, expiresAt?: number) {
+    await this.assertChannelSecret(channelId, secret);
+    if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())) throw new Error("CLIENT_CREDENTIAL_EXPIRY_INVALID");
+    const generated = createClientCredential();
+    const metadata = { id: generated.id, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), digest: generated.digest.toString("hex") };
+    const result = await this.command(() => this.redis.eval<[string, string, string, string, string, string], number>(CREATE_CLIENT,
+      [this.channelKey(channelId), this.accessKey(channelId)], [generated.id, JSON.stringify(metadata), String(CLIENT_CREDENTIAL_LIMIT), metadata.digest, String(CHANNEL_TTL_SECONDS), String(Date.now())]));
+    if (result === -1) throw new Error("CHANNEL_NOT_FOUND");
+    if (result === -2) throw new Error("CLIENT_ACCESS_NOT_ENABLED");
+    if (result === 0) throw new Error("CLIENT_CREDENTIAL_LIMIT");
+    await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
+    return { id: generated.id, token: generated.token, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }) };
+  }
+
+  async revokeClientCredential(channelId: string, secret: string, credentialId: string) {
+    await this.assertChannelSecret(channelId, secret);
+    const result = await this.command(() => this.redis.eval<[string], number>(REVOKE_CLIENT,
+      [this.accessKey(channelId)], [credentialId]));
+    if (result === 0) throw new Error("CLIENT_CREDENTIAL_NOT_FOUND");
+    await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
   }
 
   async hasChannel(id: string) {
@@ -170,7 +218,8 @@ export class RedisBroker implements Broker {
   }
 
   async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
-    await this.assertChannelSecret(channelId, secret);
+    const channel = await this.assertChannelSecret(channelId, secret);
+    if (channel.accessMode === "bearer") await this.touchAccess(channelId);
 
     const deadline = Date.now() + waitMs;
     let pollIndex = 0;
@@ -193,7 +242,8 @@ export class RedisBroker implements Broker {
   }
 
   async respond(channelId: string, secret: string, requestId: string, response: DownstreamResponse) {
-    await this.assertChannelSecret(channelId, secret);
+    const channel = await this.assertChannelSecret(channelId, secret);
+    if (channel.accessMode === "bearer") await this.touchAccess(channelId);
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
     const result = await this.command(() => this.redis.eval<[string, string], number>(RESPOND,
       [this.pendingKey(channelId, requestId), this.statsKey(channelId), this.responseKey(channelId, requestId)],
@@ -241,6 +291,7 @@ export class RedisBroker implements Broker {
 
   private pendingPrefix(channelId: string) { return `ap:channel:${channelId}:pending:`; }
   private statsKey(channelId: string) { return `ap:channel:${channelId}:capacity`; }
+  private accessKey(channelId: string) { return `ap:channel:${channelId}:access`; }
 
   private removeRequestMetric(requestId: string) {
     const state = this.requestStates.get(requestId);
@@ -252,6 +303,20 @@ export class RedisBroker implements Broker {
   private async assertChannelSecret(channelId: string, secret: string) {
     const storedSecret = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
     if (storedSecret === null) throw new Error("CHANNEL_NOT_FOUND");
-    if (storedSecret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    const channel = this.parseChannel(storedSecret);
+    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    return channel;
+  }
+
+  private async touchAccess(channelId: string) {
+    await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
+  }
+
+  private parseChannel(value: string) {
+    try {
+      const parsed = JSON.parse(value) as { secret?: unknown; accessMode?: unknown };
+      if (typeof parsed.secret === "string") return { secret: parsed.secret, accessMode: parsed.accessMode === "bearer" ? "bearer" : "public" } as const;
+    } catch {}
+    return { secret: value, accessMode: "public" as const };
   }
 }

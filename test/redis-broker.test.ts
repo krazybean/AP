@@ -7,6 +7,7 @@ import { RedisBroker } from "../src/redis-broker.js";
 class FakeRedis {
   private readonly values = new Map<string, unknown>();
   private readonly lists = new Map<string, unknown[]>();
+  private readonly hashes = new Map<string, Map<string, unknown>>();
   readonly counts = new Map<string, number>();
   failWith: Error | null = null;
   beforeCancel?: () => Promise<void>;
@@ -25,6 +26,24 @@ class FakeRedis {
   async set(key: string, value: unknown) {
     this.count("set");
     this.values.set(key, value);
+  }
+
+  async hset(key: string, values: Record<string, unknown>) {
+    this.count("hset");
+    const hash = this.hashes.get(key) ?? new Map();
+    for (const [field, value] of Object.entries(values)) hash.set(field, value);
+    this.hashes.set(key, hash);
+  }
+
+  async hget<T>(key: string, field: string) {
+    this.count("hget");
+    return (this.hashes.get(key)?.get(field) as T | undefined) ?? null;
+  }
+
+  async hdel(key: string, ...fields: string[]) {
+    this.count("hdel");
+    const hash = this.hashes.get(key);
+    for (const field of fields) hash?.delete(field);
   }
 
   async ping() {
@@ -78,6 +97,24 @@ class FakeRedis {
 
   async eval(script: string, keys: string[], args: string[]) {
     this.count("eval");
+    if (script.includes("ap:create-client")) {
+      if (!this.values.has(keys[0])) return -1;
+      const hash = this.hashes.get(keys[1])!;
+      if (hash.get("mode") !== "bearer") return -2;
+      const count = Number(hash.get("count") ?? 0);
+      if (count >= Number(args[2])) return 0;
+      const record = JSON.parse(args[1]);
+      hash.set(`c:${args[0]}`, args[1]); hash.set(`d:${args[3]}`, args[1]); hash.set("count", count + 1);
+      return 1;
+    }
+    if (script.includes("ap:revoke-client")) {
+      const hash = this.hashes.get(keys[0]);
+      const record = hash?.get(`c:${args[0]}`);
+      if (!record) return 0;
+      const parsed = JSON.parse(String(record));
+      hash!.delete(`c:${args[0]}`); hash!.delete(`d:${parsed.digest}`); hash!.set("count", Number(hash!.get("count") ?? 0) - 1);
+      return 1;
+    }
     const [channel, queue, stats, pending] = keys;
     if (script.includes("ap:admit")) {
       if (!this.values.has(channel)) return -1;
@@ -128,6 +165,18 @@ test("Redis broker binds responses to pending requests", async () => {
 
   await broker.respond(channel, secret, pending.id, { statusCode: 200, body: { pong: true } });
   assert.deepEqual(await responsePromise, { statusCode: 200, body: { pong: true } });
+});
+
+test("Redis broker protects client credential state and enforces lifecycle", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const created = await broker.createChannel("client-auth", 10, { mode: "bearer" });
+  assert.ok(created.clientCredential);
+  await broker.authenticateClient(created.id, created.clientCredential.token);
+  const second = await broker.createClientCredential(created.id, created.secret);
+  await broker.revokeClientCredential(created.id, created.secret, second.id);
+  await assert.rejects(() => broker.authenticateClient(created.id, second.token), /CLIENT_CREDENTIAL_INVALID/);
+  assert.notEqual(created.clientCredential.token, created.secret);
 });
 
 test("Redis broker removes an unconsumed request after timeout", async () => {

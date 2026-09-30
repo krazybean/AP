@@ -6,8 +6,8 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 
 | Control | Status | Evidence | Remaining risk |
 |---|---|---|---|
-| API1 Broken Object Level Authorization | PARTIAL | Channel secret checks in `src/channel-broker.ts` and `src/redis-broker.ts`; HTTP tests | Public client authorization is absent; Wave 2 |
-| API2 Broken Authentication | PARTIAL | Downstream bearer secret checks; metrics token; `test/http-security.test.ts` | Channel URLs are capabilities; no rotation/revocation |
+| API1 Broken Object Level Authorization | PASS | Per-channel bearer client credentials, downstream ownership checks, cross-channel tests | No scopes; Wave 2B |
+| API2 Broken Authentication | PASS | `X-AP-Access-Token`, digest storage, expiry/revocation, metrics token; `test/client-auth.test.ts` | No external identity provider; intentional channel-scoped model |
 | API3 Broken Object Property Level Authorization | PASS | Response envelope validation in `src/routes.ts` | Application-specific payload policy is downstream-owned |
 | API4 Unrestricted Resource Consumption | PASS | Body limit, queue/in-flight caps, timeouts, rate limits; capacity tests | Distributed edge/WAF controls are an external gate |
 | API5 Broken Function Level Authorization | PARTIAL | Downstream endpoints require secret | Client-facing policy model is deferred |
@@ -19,6 +19,10 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 | ASVS L2 input/output validation | PASS | UUID validation, body limit, response validation, header filtering; tests | Continue adversarial regression coverage |
 | ASVS L2 error handling/logging | PARTIAL | Broker failures become controlled 503s; metrics access controlled | Enable platform-native secret scanning and review production log sinks |
 | ASVS L2 dependency/configuration management | PASS | `npm ci`, lockfile, audit, pinned actions, SBOM | Credential rotation and GitHub settings are external |
+
+## Wave 2A boundary
+
+This wave separates channel identity from public-client authorization without changing the public-channel default. Ordinary application `Authorization` remains transport data; AP client authentication uses `X-AP-Access-Token`.
 
 ## Wave 2
 
