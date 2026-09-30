@@ -72,6 +72,6 @@ Those systems may communicate through AP. They should not have to become part of
 
 ## Current implementation
 
-The current implementation is the foundation for AP 1.0. It already provides public channels, request forwarding, response correlation, shared Redis-backed state in production, inactivity expiry, health checks, and prototype rate limiting.
+The current implementation is the foundation for AP 1.0. It already provides public and protected channels, request forwarding, response correlation, shared Redis-backed state in production, inactivity expiry, health checks, prototype rate limiting, credential-scoped authorization, and opt-in browser-origin isolation through trusted per-channel hostnames.
 
 Features listed above remain planned until implemented and documented as current behavior.

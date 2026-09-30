@@ -62,6 +62,12 @@ The raw `apc_` token is returned only at creation. Store it in the public client
 
 Retain `channel` and `secret` for the uplink loop. The absolute public URL is the AP origin plus `url`. Keep the secret private; it authorizes downstream polling and response delivery.
 
+### Browser-origin isolation
+
+Omitting `exposure` preserves the shared path channel. For browser-origin separation, configure AP's trusted `AP_CHANNEL_BASE_DOMAIN` (for example `channels.ap.krazybean.com`) and request `{"exposure":{"mode":"isolated-host"}}`. AP returns an absolute URL such as `https://<channel>.channels.ap.krazybean.com/`; each isolated channel hostname is a distinct browser origin. AP never derives this URL from `Host`, `X-Forwarded-Host`, or `Forwarded`; an unset or malformed base domain rejects isolated creation with `503`.
+
+On an isolated hostname, every path—including `/health`, `/metrics`, and `/channels`—is downstream application traffic. The shared `/c/{channel}` form returns `404` for isolated channels. Configure `*.channels.<AP-domain>` on the AP deployment for production; DNS and wildcard certificate provisioning are deployment responsibilities.
+
 ## 2. Poll for public requests
 
 The downstream repeatedly calls:
@@ -141,6 +147,8 @@ https://ap.krazybean.com/c/{channel}
 ```
 
 The client starts there. It should be able to read the APP landing page, discover capabilities, and make ordinary HTTP requests beneath the same channel URL.
+
+For an isolated channel, give the client the absolute URL returned by creation instead; do not rewrite it to `/c/{channel}`.
 
 The AI does **not** need to know about `/channels`, polling, Redis, or the private application's network location.
 

@@ -118,6 +118,7 @@ test("an unanswered downstream request returns 504", async () => {
     metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
     createChannel: async () => ({ id: "c0a80101-0000-4000-8000-000000000001", secret: "secret" }),
     hasChannel: async () => true,
+    channelExposure: async () => "path" as const,
     dispatch: async () => { throw new Error("DOWNSTREAM_TIMEOUT"); },
     next: async () => null,
     respond: async () => {},

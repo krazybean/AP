@@ -14,6 +14,7 @@ function unavailableBroker(retryAfterSeconds?: number) {
     metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
     createChannel: fail,
     hasChannel: async () => true,
+    channelExposure: async () => "path" as const,
     dispatch: fail,
     next: fail,
     respond: fail,

@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest } from "./broker.js";
+import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes } from "./client-scopes.js";
 
@@ -18,6 +18,7 @@ interface Channel {
   queue: PendingExchange[];
   waiters: Array<(request: PendingRequest | null) => void>;
   accessMode: "public" | "bearer";
+  exposureMode: "path" | "isolated-host";
   credentials: Map<string, { metadata: ClientCredentialMetadata; digest: Buffer }>;
 }
 
@@ -50,7 +51,7 @@ export class ChannelBroker implements Broker {
     return { queuedRequests, inFlightRequests };
   }
 
-  async createChannel(rateLimitKey = "default", limit = 10, access: AccessConfig = { mode: "public" }) {
+  async createChannel(rateLimitKey = "default", limit = 10, access: AccessConfig = { mode: "public" }, exposure: ExposureConfig = { mode: "path" }) {
     const now = Date.now();
     const current = this.creationLimits.get(rateLimitKey);
     const window = current && current.expiresAt > now
@@ -69,11 +70,12 @@ export class ChannelBroker implements Broker {
       queue: [],
       waiters: [],
       accessMode: access.mode,
+      exposureMode: exposure.mode,
       credentials: new Map(),
     };
     this.channels.set(id, channel);
     const clientCredential = access.mode === "bearer" ? this.addCredential(channel, undefined, access.scopes) : undefined;
-    return { id, secret, accessMode: access.mode, ...(clientCredential ? { clientCredential } : {}) };
+    return { id, secret, accessMode: access.mode, exposureMode: exposure.mode, ...(clientCredential ? { clientCredential } : {}) };
   }
 
   async authenticateClient(channelId: string, token: string) {
@@ -111,6 +113,10 @@ export class ChannelBroker implements Broker {
 
   async hasChannel(id: string) {
     return this.getChannel(id) !== undefined;
+  }
+
+  async channelExposure(id: string) {
+    return this.getChannel(id)?.exposureMode ?? null;
   }
 
   async dispatch(

@@ -22,11 +22,14 @@ export interface BrokerMetrics {
 export interface BrokerCapacity { maxQueuedPerChannel: number; maxInFlightPerChannel: number }
 export const DEFAULT_BROKER_CAPACITY: BrokerCapacity = { maxQueuedPerChannel: 100, maxInFlightPerChannel: 20 };
 export type AccessMode = "public" | "bearer";
+export type ExposureMode = "path" | "isolated-host";
 export interface AccessConfig { mode: AccessMode; scopes?: import("./client-scopes.js").ClientScope[] }
+export interface ExposureConfig { mode: ExposureMode }
 export interface CreatedChannel {
   id: string;
   secret: string;
   accessMode: AccessMode;
+  exposureMode: ExposureMode;
   clientCredential?: import("./client-credentials.js").CreatedClientCredential;
 }
 export type ClientCredential = import("./client-credentials.js").CreatedClientCredential;
@@ -50,11 +53,12 @@ export interface Broker {
   readonly type: "memory" | "redis";
   health(): Promise<void>;
   metrics(): BrokerMetrics;
-  createChannel(rateLimitKey?: string, limit?: number, access?: AccessConfig): Promise<CreatedChannel>;
+  createChannel(rateLimitKey?: string, limit?: number, access?: AccessConfig, exposure?: ExposureConfig): Promise<CreatedChannel>;
   authenticateClient(channelId: string, token: string): Promise<AuthenticatedClient | undefined>;
   createClientCredential(channelId: string, secret: string, expiresAt?: number, scopes?: import("./client-scopes.js").ClientScope[]): Promise<ClientCredential>;
   revokeClientCredential(channelId: string, secret: string, credentialId: string): Promise<void>;
   hasChannel(id: string): Promise<boolean>;
+  channelExposure(id: string): Promise<ExposureMode | null>;
   dispatch(
     channelId: string,
     request: Omit<PendingRequest, "id">,

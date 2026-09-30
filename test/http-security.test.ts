@@ -15,6 +15,7 @@ function stubBroker(overrides: Partial<Broker> = {}) {
     metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
     createChannel: async () => ({ id: validId, secret: "secret" }),
     hasChannel: async () => true,
+    channelExposure: async () => "path" as const,
     dispatch: async (_id: string, request: { headers: Record<string, string | string[] | undefined> }) => {
       calls++;
       (broker as { lastHeaders?: typeof request.headers }).lastHeaders = request.headers;
