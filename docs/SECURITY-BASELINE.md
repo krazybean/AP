@@ -6,11 +6,11 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 
 | Control | Status | Evidence | Remaining risk |
 |---|---|---|---|
-| API1 Broken Object Level Authorization | PASS | Per-channel bearer client credentials, downstream ownership checks, cross-channel tests | No scopes; Wave 2B |
+| API1 Broken Object Level Authorization | PASS | Per-channel bearer credentials, immutable method/path scopes, downstream ownership checks, cross-channel tests | No application identity or scopes beyond transport paths |
 | API2 Broken Authentication | PASS | `X-AP-Access-Token`, digest storage, expiry/revocation, metrics token; `test/client-auth.test.ts` | No external identity provider; intentional channel-scoped model |
 | API3 Broken Object Property Level Authorization | PASS | Response envelope validation in `src/routes.ts` | Application-specific payload policy is downstream-owned |
 | API4 Unrestricted Resource Consumption | PASS | Body limit, queue/in-flight caps, timeouts, rate limits; capacity tests | Distributed edge/WAF controls are an external gate |
-| API5 Broken Function Level Authorization | PARTIAL | Downstream endpoints require secret | Client-facing policy model is deferred |
+| API5 Broken Function Level Authorization | PASS | Credential-scoped method/path authorization before dispatch; `test/client-scopes.test.ts` | No business-function or capability semantics |
 | API6 Unrestricted Access to Sensitive Business Flows | PARTIAL | Channel creation rate limit and license option | No identity-aware client policy |
 | API7 Server Side Request Forgery | PASS | AP routes through an existing channel; AP does not accept arbitrary destination URLs or initiate private-network connections | Downstream remains trusted only within its secret boundary |
 | API8 Security Misconfiguration | PASS | Invalid security-sensitive env values fail; explicit broker mode; CI audit/build/test | Platform/WAF settings require deployment verification |
@@ -20,9 +20,11 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 | ASVS L2 error handling/logging | PARTIAL | Broker failures become controlled 503s; metrics access controlled | Enable platform-native secret scanning and review production log sinks |
 | ASVS L2 dependency/configuration management | PASS | `npm ci`, lockfile, audit, pinned actions, SBOM | Credential rotation and GitHub settings are external |
 
-## Wave 2A boundary
+## Wave 2A/2B boundary
 
-This wave separates channel identity from public-client authorization without changing the public-channel default. Ordinary application `Authorization` remains transport data; AP client authentication uses `X-AP-Access-Token`.
+Wave 2A separates channel identity from public-client authorization without changing the public-channel default. Wave 2B adds immutable credential-scoped HTTP method/path authorization. Ordinary application `Authorization` remains transport data; AP client authentication uses `X-AP-Access-Token`.
+
+Scope matching is transport-only: exact paths, trailing subtree wildcards, and `/*`; no roles, users, capabilities, regex, or policy language. Ambiguous encoded/dot-segment paths fail closed before dispatch.
 
 ## Wave 2
 

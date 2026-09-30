@@ -46,7 +46,7 @@ When either per-channel capacity is full, public channel requests receive HTTP `
 
 Channel and request path identifiers must be canonical UUID v4 values; malformed identifiers return `404` without broker access. AP removes standard hop-by-hop headers, headers named by `Connection`, inbound forwarding metadata, `Host`, and `Content-Length` before dispatch. Downstream `Set-Cookie`, hop-by-hop, and forwarding headers are not returned to the browser. Safe application headers and bodies continue through the proxy. Downstream responses are accepted only after `/next` has delivered their request; queued, late, and duplicate response IDs return `404`.
 
-AP's channel URLs still act as capability addresses; this pass does not add client authorization. Channels also share AP's browser origin, so downstream browser content can still pose cross-channel risks through mechanisms other than cookies. A later security wave should add explicit client authorization and channel origin isolation. Per-channel capacity and channel-creation controls do not replace an upstream edge/WAF rate limiter, especially on serverless platforms.
+AP's channel URLs identify destinations, but protected channels additionally require a client credential and may enforce credential-scoped transport authorization. Channels also share AP's browser origin, so downstream browser content can still pose cross-channel risks through mechanisms other than cookies. Browser origin isolation remains a later wave. Per-channel capacity and channel-creation controls do not replace an upstream edge/WAF rate limiter, especially on serverless platforms.
 
 ## Client authorization
 
@@ -56,7 +56,9 @@ Channel identity is separate from public-client authorization:
 - The downstream secret proves private application ownership/control.
 - `X-AP-Access-Token: apc_<random-token>` authorizes a public caller on protected bearer channels.
 
-Omitted `access` on channel creation means `public` for compatibility. Explicit `access.mode=bearer` creates a protected channel and returns the initial raw token once. Tokens are SHA-256 digested, support expiry/revocation, and are limited to 10 active credentials per channel. AP never consumes or forwards the ordinary application `Authorization` header for client access; it strips `X-AP-Access-Token` before downstream dispatch. Owner credential control uses `X-AP-Downstream-Secret`.
+Omitted `access` on channel creation means `public` for compatibility. Explicit `access.mode=bearer` creates a protected channel and returns the initial raw token once. Tokens are SHA-256 digested, support expiry/revocation, and are limited to 10 active credentials per channel. Optional credential scopes are immutable, deny-by-default, limited to 32 rules, and evaluated before queue admission. AP never consumes or forwards the ordinary application `Authorization` header for client access; it strips `X-AP-Access-Token` before downstream dispatch. Owner credential control uses `X-AP-Downstream-Secret`.
+
+Scope-denied requests return `403` before queue or in-flight allocation. Authorization matching is local and O(number of bounded scope rules); Redis authentication returns the stored safe credential metadata in the existing authentication lookup, without one Redis query per rule.
 
 ## Redis command budget
 
