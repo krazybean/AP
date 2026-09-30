@@ -64,8 +64,8 @@ test("credential lifecycle supports rotation, revocation, expiry, and a bounded 
   const broker = new ChannelBroker();
   const created = await broker.createChannel("test", 10, { mode: "bearer" });
   const second = await broker.createClientCredential(created.id, created.secret);
-  assert.equal(await broker.authenticateClient(created.id, created.clientCredential!.token), undefined);
-  assert.equal(await broker.authenticateClient(created.id, second.token), undefined);
+  assert.ok(await broker.authenticateClient(created.id, created.clientCredential!.token));
+  assert.ok(await broker.authenticateClient(created.id, second.token));
   await assert.rejects(() => broker.authenticateClient(created.id, created.secret), /CLIENT_CREDENTIAL_INVALID/);
   await assert.rejects(() => broker.authenticateClient(created.id, "apc_短"), /CLIENT_CREDENTIAL_INVALID/);
   await assert.rejects(() => broker.next(created.id, created.clientCredential!.token, 0), /CHANNEL_UNAUTHORIZED/);

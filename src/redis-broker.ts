@@ -13,6 +13,7 @@ import {
   type PendingRequest,
 } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, type ClientCredentialMetadata } from "./client-credentials.js";
+import { validateScopes, type ClientScope } from "./client-scopes.js";
 
 const CHANNEL_TTL_SECONDS = 15 * 60;
 const RESPONSE_TTL_SECONDS = CHANNEL_TTL_SECONDS;
@@ -101,7 +102,7 @@ export class RedisBroker implements Broker {
     };
   }
 
-  async createChannel(rateLimitKey = "default", limit = 10, access = { mode: "public" as const }) {
+  async createChannel(rateLimitKey = "default", limit = 10, access: import("./broker.js").AccessConfig = { mode: "public" }) {
     const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
     const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}:${bucket}`;
     const count = await this.command(() => this.redis.incr(rateLimitKeyName));
@@ -116,7 +117,7 @@ export class RedisBroker implements Broker {
     if (access.mode === "public") return { id, secret, accessMode: "public" as const };
     await this.command(() => this.redis.hset(this.accessKey(id), { mode: "bearer", count: 0 }));
     await this.command(() => this.redis.expire(this.accessKey(id), CHANNEL_TTL_SECONDS));
-    const clientCredential = await this.createClientCredential(id, secret);
+    const clientCredential = await this.createClientCredential(id, secret, undefined, validateScopes(access.scopes));
     return { id, secret, accessMode: "bearer" as const, clientCredential };
   }
 
@@ -124,27 +125,28 @@ export class RedisBroker implements Broker {
     const stored = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
     if (stored === null) throw new Error("CHANNEL_NOT_FOUND");
     const channel = this.parseChannel(stored);
-    if (channel.accessMode !== "bearer") return;
+    if (channel.accessMode !== "bearer") return undefined;
     const record = await this.command(() => this.redis.hget<string>(this.accessKey(channelId), `d:${digestToken(token).toString("hex")}`));
     if (!record) throw new Error("CLIENT_CREDENTIAL_INVALID");
     const metadata = JSON.parse(record) as ClientCredentialMetadata & { digest: string };
     if (metadata.expiresAt !== undefined && metadata.expiresAt <= Date.now()) throw new Error("CLIENT_CREDENTIAL_EXPIRED");
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
     await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
+    return { id: metadata.id, createdAt: metadata.createdAt, ...(metadata.expiresAt === undefined ? {} : { expiresAt: metadata.expiresAt }), ...(metadata.scopes ? { scopes: metadata.scopes } : {}) };
   }
 
-  async createClientCredential(channelId: string, secret: string, expiresAt?: number) {
+  async createClientCredential(channelId: string, secret: string, expiresAt?: number, scopes?: ClientScope[]) {
     await this.assertChannelSecret(channelId, secret);
     if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())) throw new Error("CLIENT_CREDENTIAL_EXPIRY_INVALID");
-    const generated = createClientCredential();
-    const metadata = { id: generated.id, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), digest: generated.digest.toString("hex") };
+    const generated = createClientCredential(validateScopes(scopes));
+    const metadata = { id: generated.id, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), ...(scopes ? { scopes } : {}), digest: generated.digest.toString("hex") };
     const result = await this.command(() => this.redis.eval<[string, string, string, string, string, string], number>(CREATE_CLIENT,
       [this.channelKey(channelId), this.accessKey(channelId)], [generated.id, JSON.stringify(metadata), String(CLIENT_CREDENTIAL_LIMIT), metadata.digest, String(CHANNEL_TTL_SECONDS), String(Date.now())]));
     if (result === -1) throw new Error("CHANNEL_NOT_FOUND");
     if (result === -2) throw new Error("CLIENT_ACCESS_NOT_ENABLED");
     if (result === 0) throw new Error("CLIENT_CREDENTIAL_LIMIT");
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
-    return { id: generated.id, token: generated.token, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }) };
+    return { id: generated.id, token: generated.token, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), ...(scopes ? { scopes } : {}) };
   }
 
   async revokeClientCredential(channelId: string, secret: string, credentialId: string) {
