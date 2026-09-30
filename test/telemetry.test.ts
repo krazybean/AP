@@ -83,11 +83,17 @@ test("security metrics expose only bounded reason and mode dimensions", async ()
   const channel = await app.inject({ method: "POST", url: "/channels", payload: { exposure: { mode: "isolated-host" } } });
   const channelId = channel.json().channel;
   await app.inject({ method: "GET", url: `/c/${channelId}/x` });
+  await Promise.all(Array.from({ length: 100 }, (_, index) => app.inject({
+    method: "GET",
+    url: `/probe/${index}?path-secret-${index}`,
+    headers: { host: `${channelId}.${baseDomain}.evil-${index}.example` },
+  })));
   const metrics = await app.inject({ method: "GET", url: "/metrics" });
   const serialized = JSON.stringify(metrics.json());
   assert.equal(serialized.includes(channelId), false);
   assert.equal(serialized.includes("/c/"), false);
   assert.equal(serialized.includes(baseDomain), false);
+  assert.equal(serialized.includes("evil-99"), false);
   assert.match(serialized, /authFailures|invalidHosts|channelsCreated/);
   await app.close();
   if (prior === undefined) delete process.env.AP_CHANNEL_BASE_DOMAIN;
