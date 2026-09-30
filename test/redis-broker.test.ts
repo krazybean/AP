@@ -141,6 +141,21 @@ test("Redis broker removes an unconsumed request after timeout", async () => {
   assert.equal(await broker.next(channel, secret, 0), null);
 });
 
+test("Redis timeout releases queued capacity for a later request", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never, { maxQueuedPerChannel: 1, maxInFlightPerChannel: 1 });
+  const { id, secret } = await broker.createChannel();
+  const request = { method: "GET", path: "/", headers: {}, body: null };
+
+  await assert.rejects(broker.dispatch(id, request, 1), /DOWNSTREAM_TIMEOUT/);
+  const result = broker.dispatch(id, request, 1_000);
+  const pending = await broker.next(id, secret, 100);
+  assert.ok(pending);
+  await broker.respond(id, secret, pending.id, { statusCode: 200 });
+  assert.deepEqual(await result, { statusCode: 200 });
+  assert.equal(broker.metrics().queuedRequests + broker.metrics().inFlightRequests, 0);
+});
+
 test("Redis broker rejects a response after timeout", async () => {
   const broker = new RedisBroker(new FakeRedis() as never);
   const { id: channel, secret } = await broker.createChannel();
