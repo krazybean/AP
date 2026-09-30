@@ -38,7 +38,16 @@ Content-Type: application/json
 {"access":{"mode":"bearer"}}
 ```
 
-The response includes the downstream `secret` and one raw client token:
+The response includes the downstream `secret` and one raw client token. An optional scoped initial credential can be requested:
+
+```json
+{
+  "access": {
+    "mode": "bearer",
+    "scopes": [{ "methods": ["GET"], "path": "/projects/*" }]
+  }
+}
+```
 
 ```json
 {
@@ -164,6 +173,19 @@ X-AP-Downstream-Secret: <downstream channel secret>
 ```
 
 The control header is deliberately separate from ordinary `Authorization`, which remains reserved for downstream application semantics and the existing polling/response transport. At most 10 active credentials are retained per channel. Credential metadata endpoints never return raw tokens or digests.
+
+## Credential-scoped authorization
+
+Authentication answers which credential may call AP. Authorization answers which HTTP operation that credential may dispatch. A credential created without `scopes` is unrestricted for compatibility. A credential with scopes is deny-by-default and matches only explicit HTTP methods and application paths:
+
+```json
+{"scopes":[
+  {"methods":["GET"],"path":"/projects/*"},
+  {"methods":["POST"],"path":"/generate"}
+]}
+```
+
+Paths are either exact (`/projects`) or trailing subtree wildcards (`/projects/*`); `/*` matches all application paths. Queries are ignored for authorization but preserved for downstream dispatch. Methods are matched explicitly and normalized to uppercase; `GET` does not imply `HEAD`. Scope arrays are immutable and limited to 32 rules. Replace a scoped credential to change its permissions, then revoke the old one. Valid credentials that fail scope matching receive `403`; failed authentication remains `401`.
 
 ## Minimal loop
 

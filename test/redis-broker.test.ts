@@ -179,6 +179,14 @@ test("Redis broker protects client credential state and enforces lifecycle", asy
   assert.notEqual(created.clientCredential.token, created.secret);
 });
 
+test("Redis broker returns scoped metadata without storing a raw token", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const created = await broker.createChannel("scoped", 10, { mode: "bearer", scopes: [{ methods: ["GET"], path: "/read/*" }] });
+  const authenticated = await broker.authenticateClient(created.id, created.clientCredential!.token);
+  assert.deepEqual(authenticated?.scopes, [{ methods: ["GET"], path: "/read/*" }]);
+});
+
 test("Redis broker removes an unconsumed request after timeout", async () => {
   const broker = new RedisBroker(new FakeRedis() as never);
   const { id: channel, secret } = await broker.createChannel();

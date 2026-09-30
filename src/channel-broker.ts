@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
+import { validateScopes } from "./client-scopes.js";
 
 interface PendingExchange {
   request: PendingRequest;
@@ -71,31 +72,31 @@ export class ChannelBroker implements Broker {
       credentials: new Map(),
     };
     this.channels.set(id, channel);
-    const clientCredential = access.mode === "bearer" ? this.addCredential(channel) : undefined;
+    const clientCredential = access.mode === "bearer" ? this.addCredential(channel, undefined, access.scopes) : undefined;
     return { id, secret, accessMode: access.mode, ...(clientCredential ? { clientCredential } : {}) };
   }
 
   async authenticateClient(channelId: string, token: string) {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.accessMode === "public") return;
+    if (channel.accessMode === "public") return undefined;
     for (const credential of channel.credentials.values()) {
       if (!tokenDigestsMatch(token, credential.digest)) continue;
       if (credential.metadata.expiresAt !== undefined && credential.metadata.expiresAt <= Date.now()) {
         throw new Error("CLIENT_CREDENTIAL_EXPIRED");
       }
       channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
-      return;
+      return credential.metadata;
     }
     throw new Error("CLIENT_CREDENTIAL_INVALID");
   }
 
-  async createClientCredential(channelId: string, secret: string, expiresAt?: number) {
+  async createClientCredential(channelId: string, secret: string, expiresAt?: number, scopes?: import("./client-scopes.js").ClientScope[]) {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
     if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
     if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())) throw new Error("CLIENT_CREDENTIAL_EXPIRY_INVALID");
-    const credential = this.addCredential(channel, expiresAt);
+    const credential = this.addCredential(channel, expiresAt, validateScopes(scopes));
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
     return credential;
   }
@@ -192,15 +193,15 @@ export class ChannelBroker implements Broker {
     return channel;
   }
 
-  private addCredential(channel: Channel, expiresAt?: number) {
+  private addCredential(channel: Channel, expiresAt?: number, scopes?: import("./client-scopes.js").ClientScope[]) {
     for (const [id, credential] of channel.credentials) {
       if (credential.metadata.expiresAt !== undefined && credential.metadata.expiresAt <= Date.now()) channel.credentials.delete(id);
     }
     if (channel.credentials.size >= CLIENT_CREDENTIAL_LIMIT) throw new Error("CLIENT_CREDENTIAL_LIMIT");
-    const generated = createClientCredential();
-    const metadata: ClientCredentialMetadata = { id: generated.id, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }) };
+    const generated = createClientCredential(scopes);
+    const metadata: ClientCredentialMetadata = { id: generated.id, createdAt: generated.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), ...(scopes ? { scopes } : {}) };
     channel.credentials.set(metadata.id, { metadata, digest: generated.digest });
-    return { id: metadata.id, token: generated.token, createdAt: metadata.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }) };
+    return { id: metadata.id, token: generated.token, createdAt: metadata.createdAt, ...(expiresAt === undefined ? {} : { expiresAt }), ...(scopes ? { scopes } : {}) };
   }
 
   private deliver(channel: Channel) {
