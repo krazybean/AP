@@ -150,6 +150,8 @@ The client starts there. It should be able to read the APP landing page, discove
 
 For an isolated channel, give the client the absolute URL returned by creation instead; do not rewrite it to `/c/{channel}`.
 
+Every AP response includes `X-AP-Request-ID`. AP generates this identifier; client-supplied `X-AP-Request-ID` values are not trusted or reused. Use the returned value when correlating an AP response with operational audit records. It carries no authorization meaning.
+
 The AI does **not** need to know about `/channels`, polling, Redis, or the private application's network location.
 
 For a protected channel, public requests include:
