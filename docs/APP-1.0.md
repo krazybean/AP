@@ -1,14 +1,16 @@
 # APP 1.0 — Current Contract
 
-APP is the **AI Proxy Protocol**: the application-level contract used by an application reachable through AP.
+APP is the **AI Proxy Protocol**: the small application contract used by an application reachable through AP.
 
-APP is intentionally separate from AP transport. AP can change brokers or uplink transports without requiring an application's capability model to change.
+Its job is simple: describe what the application is and what it exposes.
 
-## Normative invariant
+APP is intentionally separate from AP transport. AP can change brokers, uplinks, or routing behavior without requiring the application's capability model to change.
 
-> **The root (`/`) of an APP 1.0 application is its machine-readable landing page. It identifies the application and describes the routes or capabilities the application chooses to expose.**
+## Core invariant
 
-The application owns this document. AP forwards it; AP does not generate or interpret it.
+> **The root (`/`) is the application's machine-readable landing page. It identifies the application and describes the routes or capabilities the application chooses to expose.**
+
+The application owns this document. AP forwards it; AP does not generate it or decide what the application should expose.
 
 ## Current interoperable shape
 
@@ -32,14 +34,16 @@ The reference implementation currently uses:
 For the current proof of concept:
 
 - `protocol` identifies the APP version.
-- `application` identifies the downstream application.
-- `description` tells an unfamiliar client what the application is for.
+- `application` identifies the private application.
+- `description` explains what the application is for.
 - `routes` advertises capabilities using ordinary HTTP methods and application-relative paths.
-- Each route should describe its purpose clearly enough for an AI client to decide whether and how to use it.
+- Each route should explain its purpose clearly enough for an unfamiliar client to decide whether and how to use it.
 
 ## Not frozen yet
 
-The example above is the current discovery convention, not a finalized schema specification. In particular, APP has not yet frozen conventions for input/output schemas, authentication declarations, errors, capability metadata, streaming, pagination, or protocol negotiation.
+The example above is the current discovery convention, not a finalized schema specification.
+
+APP has not yet frozen conventions for input/output schemas, authentication declarations, errors, capability metadata, streaming, pagination, or protocol negotiation.
 
 Applications may implement the current shape for interoperability experiments, but should isolate it behind an adapter so later APP 1.0 refinement does not leak throughout the application.
 
@@ -62,6 +66,6 @@ Paths in the APP landing page are therefore application-relative. They must not 
 
 ## Design principle
 
-**AP connects. APP communicates. Applications define capability.**
+> **AP connects. APP describes. Applications define capability.**
 
 An APP implementation should describe the application honestly and narrowly. Expose only capabilities intended for remote AI use and keep application-specific authorization and semantics in the application layer.

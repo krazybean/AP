@@ -2,7 +2,7 @@
   "name": "ai-proxy",
   "version": "0.1.0",
   "private": true,
-  "description": "Public rendezvous and proxy service for APP-speaking applications.",
+  "description": "AI traffic plane for exposing private applications through ordinary HTTPS.",
   "type": "module",
   "engines": {
     "node": "20.x"
