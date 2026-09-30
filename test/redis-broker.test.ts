@@ -103,7 +103,7 @@ class FakeRedis {
     }
     if (script.includes("ap:cancel")) {
       const hook = this.beforeCancel; this.beforeCancel = undefined; if (hook) await hook();
-      const state = this.values.get(keys[0]); if (!state) return this.values.has(keys[3]) ? 1 : 0;
+      const state = this.values.get(keys[0]); if (!state) return this.values.has(keys[3]) ? 2 : 0;
       const field = state === "q" ? "q" : "f";
       if (state === "q") this.lists.set(keys[1], (this.lists.get(keys[1]) ?? []).filter((x) => JSON.stringify(x) !== args[0]));
       this.values.set(`${keys[2]}:${field}`, Math.max(0, Number(this.values.get(`${keys[2]}:${field}`) ?? 0) - 1));

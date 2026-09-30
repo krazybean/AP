@@ -37,7 +37,7 @@ local state = redis.call('GET', KEYS[1]); if not state or state == 'q' then retu
 redis.call('DEL', KEYS[1]); redis.call('HINCRBY', KEYS[2], state == 'q' and 'q' or 'f', -1)
 redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[2]); redis.call('EXPIRE', KEYS[2], ARGV[2]); return 1`;
 const CANCEL = `-- ap:cancel
-local state = redis.call('GET', KEYS[1]); if not state then return redis.call('EXISTS', KEYS[4]) end
+local state = redis.call('GET', KEYS[1]); if not state then if redis.call('EXISTS', KEYS[4]) == 1 then return 2 else return 0 end end
 if state == 'q' then redis.call('LREM', KEYS[2], 1, ARGV[1]); redis.call('HINCRBY', KEYS[3], 'q', -1) else redis.call('HINCRBY', KEYS[3], 'f', -1) end
 redis.call('DEL', KEYS[1]); redis.call('EXPIRE', KEYS[3], ARGV[2]); return 1`;
 
@@ -146,7 +146,7 @@ export class RedisBroker implements Broker {
         [this.pendingKey(channelId, pending.id), this.queueKey(channelId), this.statsKey(channelId), responseKey],
         [JSON.stringify(pending), String(CHANNEL_TTL_SECONDS)]));
       this.removeRequestMetric(pending.id);
-      if (cancelled === 1) {
+      if (cancelled === 2) {
         const response = await this.command(() => this.redis.get<DownstreamResponse>(responseKey));
         if (response !== null) {
           await this.command(() => this.redis.del(responseKey));

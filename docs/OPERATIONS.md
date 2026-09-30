@@ -50,7 +50,7 @@ Approximate command budgets after the hardening pass are:
 | Response wait for 15 s | ~8 polling GETs |
 | Response wait for 30 s | ~11 polling GETs |
 | Downstream response submission | 3 |
-| Timeout cleanup | 1 atomic Lua call |
+| Timeout cleanup | 1 atomic Lua call; 1 additional read only if a response wins the timeout race |
 
 The previous 100 ms polling path consumed roughly 253 commands for one idle 25 s `/next` request and roughly 50/150/300 response-key GETs for 5/15/30 second waits. Current capacity transitions are atomic Redis scripts; each counts as one command.
 
