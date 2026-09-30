@@ -28,6 +28,20 @@ In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRI
 
 Broker pressure limits default to `AP_BROKER_MAX_QUEUED_PER_CHANNEL=100` and `AP_BROKER_MAX_IN_FLIGHT_PER_CHANNEL=20`. They apply per channel; Redis enforces them across AP instances. Channel creation limits use process-local state in memory mode and shared Redis counters in Redis mode. AP has no global request-rate limiter; configure an upstream edge/WAF control for internet-facing abuse protection.
 
+## Edge/WAF deployment gate
+
+The repository does not deploy a distributed edge limiter. Configure this before internet exposure, using the platform's source-aware controls:
+
+| Route | Required policy |
+|---|---|
+| `/channels` | Strict anonymous/source rate limit and burst cap |
+| `/c/*` | General request rate limit plus per-source burst cap |
+| malformed/random `/c/*` probes | Reject or throttle before Redis invocation where the platform supports it |
+| `/health` | Permit monitoring, cap abusive volume |
+| `/metrics` | Keep application bearer protection; WAF is additional defense |
+
+Verify the rules in the Vercel/provider dashboard and record deployment evidence. Do not describe these rules as deployed until that external step is complete. GitHub secret scanning and dependency-review settings are likewise repository-owner controls that must be enabled in GitHub settings when available.
+
 When either per-channel capacity is full, public channel requests receive HTTP `429` with `Retry-After: 1` and `error: "channel_capacity_exceeded"`; clients should use backoff because that delay is a retry hint, not a guarantee that capacity has freed.
 
 Channel and request path identifiers must be canonical UUID v4 values; malformed identifiers return `404` without broker access. AP removes standard hop-by-hop headers, headers named by `Connection`, inbound forwarding metadata, `Host`, and `Content-Length` before dispatch. Downstream `Set-Cookie`, hop-by-hop, and forwarding headers are not returned to the browser. Safe application headers and bodies continue through the proxy. Downstream responses are accepted only after `/next` has delivered their request; queued, late, and duplicate response IDs return `404`.
