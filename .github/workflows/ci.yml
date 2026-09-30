@@ -2,7 +2,16 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,7 +31,9 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm sbom --sbom-format=cyclonedx --sbom-type=application > ap.cdx.json
+        if: github.ref == 'refs/heads/main'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.ref == 'refs/heads/main'
         with:
           name: ap-sbom
           path: ap.cdx.json
