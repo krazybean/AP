@@ -16,7 +16,21 @@ The in-memory broker is process-local. It is not safe as a horizontally scaled/s
 
 `GET /health` checks the configured broker. A healthy response is HTTP `200` with `broker: "ok"` and `brokerType` set to `memory` or `redis`. Redis or broker failure returns HTTP `503` with `status: "degraded"`.
 
+Broker health results are cached for at most one second, including failures, to limit Redis work during health-check bursts. Concurrent checks share one broker operation.
+
 `GET /metrics` reports process-local counters for channel creation, rate limiting, proxy traffic, timeouts, broker errors, queued requests, and in-flight requests. The Redis broker additionally reports `redisCommands` and `redisPollCommands`. These counters reset when the process restarts; Redis-global aggregation is intentionally not implemented.
+
+In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRICS_TOKEN` is set and the request includes `Authorization: Bearer <token>`. Keep this token secret; if unset, metrics are disabled.
+
+## HTTP boundary
+
+`AP_REQUEST_BODY_LIMIT_BYTES` sets Fastify's maximum request body size in bytes. It defaults to `1048576` (1 MiB); set a positive integer appropriate for the largest expected application payload. Invalid values stop startup.
+
+Broker pressure limits default to `AP_BROKER_MAX_QUEUED_PER_CHANNEL=100` and `AP_BROKER_MAX_IN_FLIGHT_PER_CHANNEL=20`. They apply per channel; Redis enforces them across AP instances. A process-local HTTP limiter cannot replace an upstream edge/WAF control.
+
+Channel and request path identifiers must be canonical UUID v4 values; malformed identifiers return `404` without broker access. AP removes standard hop-by-hop headers, headers named by `Connection`, and inbound forwarding metadata before dispatch. Downstream `Set-Cookie`, hop-by-hop, and forwarding headers are not returned to the browser. Safe application headers and bodies continue through the proxy.
+
+AP's channel URLs still act as capability addresses; this pass does not add client authorization. Channels also share AP's browser origin, so downstream browser content can still pose cross-channel risks through mechanisms other than cookies. A later security wave should add explicit client authorization and channel origin isolation. The existing process-local channel-creation limiter is not a distributed edge control; deploy an upstream WAF or distributed rate limiter for internet-facing abuse protection, especially on serverless platforms.
 
 ## Redis command budget
 

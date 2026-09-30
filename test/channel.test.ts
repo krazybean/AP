@@ -116,13 +116,13 @@ test("an unanswered downstream request returns 504", async () => {
     type: "memory",
     health: async () => {},
     metrics: () => ({ queuedRequests: 0, inFlightRequests: 0 }),
-    createChannel: async () => ({ id: "channel", secret: "secret" }),
+    createChannel: async () => ({ id: "c0a80101-0000-4000-8000-000000000001", secret: "secret" }),
     hasChannel: async () => true,
     dispatch: async () => { throw new Error("DOWNSTREAM_TIMEOUT"); },
     next: async () => null,
     respond: async () => {},
   });
-  const response = await app.inject({ method: "GET", url: "/c/channel" });
+  const response = await app.inject({ method: "GET", url: "/c/c0a80101-0000-4000-8000-000000000001" });
   assert.equal(response.statusCode, 504);
   assert.deepEqual(response.json(), { error: "downstream_timeout" });
   await app.close();
@@ -181,7 +181,7 @@ test("unknown response request returns a not-found error", async () => {
 
   const response = await app.inject({
     method: "POST",
-    url: `/channels/${channel}/responses/not-a-request`,
+    url: `/channels/${channel}/responses/c0a80101-0000-4000-8000-000000000001`,
     headers: { authorization: `Bearer ${secret}` },
     payload: { statusCode: 200, body: { ok: true } },
   });
@@ -213,7 +213,7 @@ test("invalid downstream response envelopes are rejected", async () => {
 
   const response = await app.inject({
     method: "POST",
-    url: `/channels/${channel}/responses/not-a-request`,
+    url: `/channels/${channel}/responses/c0a80101-0000-4000-8000-000000000001`,
     headers: { authorization: `Bearer ${secret}` },
     payload: { statusCode: "200" },
   });
