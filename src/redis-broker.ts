@@ -4,6 +4,9 @@ import { Redis } from "@upstash/redis";
 
 import {
   BrokerUnavailableError,
+  BrokerCapacityError,
+  DEFAULT_BROKER_CAPACITY,
+  type BrokerCapacity,
   type Broker,
   type BrokerMetrics,
   type DownstreamResponse,
@@ -11,9 +14,32 @@ import {
 } from "./broker.js";
 
 const CHANNEL_TTL_SECONDS = 15 * 60;
-const RESPONSE_TTL_SECONDS = 60;
+const RESPONSE_TTL_SECONDS = CHANNEL_TTL_SECONDS;
 const CHANNEL_CREATION_WINDOW_SECONDS = 60 * 60;
 const POLL_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 5_000] as const;
+
+const ADMIT = `-- ap:admit
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+local q = tonumber(redis.call('HGET', KEYS[3], 'q') or '0')
+if q >= tonumber(ARGV[2]) then return 0 end
+redis.call('HINCRBY', KEYS[3], 'q', 1); redis.call('SET', KEYS[4], 'q', 'EX', ARGV[3])
+redis.call('RPUSH', KEYS[2], ARGV[1]); redis.call('EXPIRE', KEYS[2], ARGV[3]); redis.call('EXPIRE', KEYS[3], ARGV[3]); return 1`;
+const DELIVER = `-- ap:deliver
+if redis.call('EXISTS', KEYS[1]) == 0 then return -1 end
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+local f = tonumber(redis.call('HGET', KEYS[3], 'f') or '0'); if f >= tonumber(ARGV[1]) then return '' end
+local item = redis.call('LPOP', KEYS[2]); if not item then return '' end
+local id = cjson.decode(item).id; redis.call('HINCRBY', KEYS[3], 'q', -1); redis.call('HINCRBY', KEYS[3], 'f', 1)
+redis.call('SET', KEYS[4] .. id, 'i', 'EX', ARGV[2]); redis.call('EXPIRE', KEYS[3], ARGV[2]); return item`;
+const RESPOND = `-- ap:respond
+local state = redis.call('GET', KEYS[1]); if not state or state == 'q' then return 0 end
+redis.call('DEL', KEYS[1]); redis.call('HINCRBY', KEYS[2], state == 'q' and 'q' or 'f', -1)
+redis.call('SET', KEYS[3], ARGV[1], 'EX', ARGV[2]); redis.call('EXPIRE', KEYS[2], ARGV[2]); return 1`;
+const CANCEL = `-- ap:cancel
+local state = redis.call('GET', KEYS[1]); if not state then return redis.call('EXISTS', KEYS[4]) end
+if state == 'q' then redis.call('LREM', KEYS[2], 1, ARGV[1]); redis.call('HINCRBY', KEYS[3], 'q', -1) else redis.call('HINCRBY', KEYS[3], 'f', -1) end
+redis.call('DEL', KEYS[1]); redis.call('EXPIRE', KEYS[3], ARGV[2]); return 1`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +77,7 @@ export class RedisBroker implements Broker {
   private redisCommands = 0;
   private redisPollCommands = 0;
 
-  constructor(private readonly redis = Redis.fromEnv()) {}
+  constructor(private readonly redis = Redis.fromEnv(), private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY) {}
 
   async health() {
     await this.command(() => this.redis.ping());
@@ -90,53 +116,71 @@ export class RedisBroker implements Broker {
     request: Omit<PendingRequest, "id">,
     timeoutMs = 30_000,
   ): Promise<DownstreamResponse> {
-    const channelSecret = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
-    if (channelSecret === null) throw new Error("CHANNEL_NOT_FOUND");
-    await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
-
     const pending: PendingRequest = { id: randomUUID(), ...request };
-    await this.command(() => this.redis.set(this.pendingKey(channelId, pending.id), "1", {
-      ex: RESPONSE_TTL_SECONDS,
-    }));
-    await this.command(() => this.redis.rpush(this.queueKey(channelId), pending));
-    await this.command(() => this.redis.expire(this.queueKey(channelId), CHANNEL_TTL_SECONDS));
+    const admitted = await this.command(() => this.redis.eval<[string, string, string], number>(ADMIT,
+      [this.channelKey(channelId), this.queueKey(channelId), this.statsKey(channelId), this.pendingKey(channelId, pending.id)],
+      [JSON.stringify(pending), String(this.capacity.maxQueuedPerChannel), String(CHANNEL_TTL_SECONDS)]));
+    if (admitted === -1) throw new Error("CHANNEL_NOT_FOUND");
+    if (admitted === 0) throw new BrokerCapacityError();
     this.requestStates.set(pending.id, "queued");
     this.queuedRequests += 1;
 
     const responseKey = this.responseKey(channelId, pending.id);
     const deadline = Date.now() + timeoutMs;
     let pollIndex = 0;
-
-    while (Date.now() < deadline) {
-      const response = await this.command(
-        () => this.redis.get<DownstreamResponse>(responseKey),
-        true,
-      );
-      if (response !== null) {
-        await this.command(() => this.redis.del(responseKey));
-        return response;
+    try {
+      while (Date.now() < deadline) {
+        const response = await this.command(
+          () => this.redis.get<DownstreamResponse>(responseKey),
+          true,
+        );
+        if (response !== null) {
+          await this.command(() => this.redis.del(responseKey));
+          this.removeRequestMetric(pending.id);
+          return response;
+        }
+        await this.pollDelay(deadline, pollIndex++);
       }
-      await this.pollDelay(deadline, pollIndex++);
-    }
 
-    await this.command(() => this.redis.del(this.pendingKey(channelId, pending.id)));
-    await this.command(() => this.redis.lrem(this.queueKey(channelId), 1, pending));
-    this.removeRequestMetric(pending.id);
-    throw new Error("DOWNSTREAM_TIMEOUT");
+      const cancelled = await this.command(() => this.redis.eval<[string, string], number>(CANCEL,
+        [this.pendingKey(channelId, pending.id), this.queueKey(channelId), this.statsKey(channelId), responseKey],
+        [JSON.stringify(pending), String(CHANNEL_TTL_SECONDS)]));
+      this.removeRequestMetric(pending.id);
+      if (cancelled === 1) {
+        const response = await this.command(() => this.redis.get<DownstreamResponse>(responseKey));
+        if (response !== null) {
+          await this.command(() => this.redis.del(responseKey));
+          return response;
+        }
+      }
+      throw new Error("DOWNSTREAM_TIMEOUT");
+    } catch (error) {
+      this.removeRequestMetric(pending.id);
+      if (error instanceof Error && error.message === "DOWNSTREAM_TIMEOUT") throw error;
+      try {
+        await this.command(() => this.redis.eval<[string, string], number>(CANCEL,
+          [this.pendingKey(channelId, pending.id), this.queueKey(channelId), this.statsKey(channelId), responseKey],
+          [JSON.stringify(pending), String(CHANNEL_TTL_SECONDS)]));
+      } catch (cleanupError) {
+        const failures = new AggregateError([error, cleanupError], "BROKER_DISPATCH_CLEANUP_FAILED", { cause: error });
+        throw new BrokerUnavailableError("BROKER_UNAVAILABLE", retryAfterSeconds(cleanupError), { cause: failures });
+      }
+      throw error;
+    }
   }
 
   async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
     await this.assertChannelSecret(channelId, secret);
-    await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
 
     const deadline = Date.now() + waitMs;
     let pollIndex = 0;
     while (Date.now() < deadline) {
-      const pending = await this.command(
-        () => this.redis.lpop<PendingRequest>(this.queueKey(channelId)),
-        true,
-      );
-      if (pending !== null) {
+      const rawPending = await this.command(() => this.redis.eval<[string, string], string | number>(DELIVER,
+        [this.channelKey(channelId), this.queueKey(channelId), this.statsKey(channelId), this.pendingPrefix(channelId)],
+        [String(this.capacity.maxInFlightPerChannel), String(CHANNEL_TTL_SECONDS)]), true);
+      if (typeof rawPending === "number") throw new Error("CHANNEL_NOT_FOUND");
+      if (rawPending) {
+        const pending = typeof rawPending === "string" ? JSON.parse(rawPending) as PendingRequest : rawPending as PendingRequest;
         this.queuedRequests = Math.max(0, this.queuedRequests - 1);
         this.inFlightRequests += 1;
         this.requestStates.set(pending.id, "inFlight");
@@ -151,15 +195,10 @@ export class RedisBroker implements Broker {
   async respond(channelId: string, secret: string, requestId: string, response: DownstreamResponse) {
     await this.assertChannelSecret(channelId, secret);
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
-    const pendingKey = this.pendingKey(channelId, requestId);
-    if ((await this.command(() => this.redis.exists(pendingKey))) !== 1) {
-      throw new Error("REQUEST_NOT_FOUND");
-    }
-
-    await this.command(() => this.redis.set(this.responseKey(channelId, requestId), response, {
-      ex: RESPONSE_TTL_SECONDS,
-    }));
-    await this.command(() => this.redis.del(pendingKey));
+    const result = await this.command(() => this.redis.eval<[string, string], number>(RESPOND,
+      [this.pendingKey(channelId, requestId), this.statsKey(channelId), this.responseKey(channelId, requestId)],
+      [JSON.stringify(response), String(RESPONSE_TTL_SECONDS)]));
+    if (result === 0) throw new Error("REQUEST_NOT_FOUND");
     this.removeRequestMetric(requestId);
   }
 
@@ -199,6 +238,9 @@ export class RedisBroker implements Broker {
   private pendingKey(channelId: string, requestId: string) {
     return `ap:channel:${channelId}:pending:${requestId}`;
   }
+
+  private pendingPrefix(channelId: string) { return `ap:channel:${channelId}:pending:`; }
+  private statsKey(channelId: string) { return `ap:channel:${channelId}:capacity`; }
 
   private removeRequestMetric(requestId: string) {
     const state = this.requestStates.get(requestId);

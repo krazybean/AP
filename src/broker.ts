@@ -19,10 +19,20 @@ export interface BrokerMetrics {
   redisPollCommands?: number;
 }
 
+export interface BrokerCapacity { maxQueuedPerChannel: number; maxInFlightPerChannel: number }
+export const DEFAULT_BROKER_CAPACITY: BrokerCapacity = { maxQueuedPerChannel: 100, maxInFlightPerChannel: 20 };
+
 export class BrokerUnavailableError extends Error {
-  constructor(message = "BROKER_UNAVAILABLE", readonly retryAfterSeconds?: number) {
-    super(message);
+  constructor(message = "BROKER_UNAVAILABLE", readonly retryAfterSeconds?: number, options?: ErrorOptions) {
+    super(message, options);
     this.name = "BrokerUnavailableError";
+  }
+}
+
+export class BrokerCapacityError extends Error {
+  constructor() {
+    super("BROKER_CAPACITY_EXCEEDED");
+    this.name = "BrokerCapacityError";
   }
 }
 
