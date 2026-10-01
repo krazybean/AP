@@ -15,6 +15,7 @@ import {
 } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes, type ClientScope } from "./client-scopes.js";
+import { SERVICE_INSTANCE_LIMIT, createService, validateServiceName, type ServiceSnapshot } from "./services.js";
 
 const CHANNEL_TTL_SECONDS = 15 * 60;
 const RESPONSE_TTL_SECONDS = CHANNEL_TTL_SECONDS;
@@ -51,6 +52,23 @@ redis.call('HSET', KEYS[2], 'c:' .. ARGV[1], ARGV[2], 'd:' .. ARGV[4], ARGV[2]);
 const REVOKE_CLIENT = `-- ap:revoke-client
 local record = redis.call('HGET', KEYS[1], 'c:' .. ARGV[1]); if not record then return 0 end
 local parsed = cjson.decode(record); redis.call('HDEL', KEYS[1], 'c:' .. ARGV[1], 'd:' .. parsed.digest); redis.call('HINCRBY', KEYS[1], 'count', -1); return 1`;
+const CREATE_SERVICE = `-- ap:create-service
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+redis.call('SET', KEYS[1], ARGV[1]); redis.call('HSET', KEYS[2], 'serviceId', ARGV[1], 'name', ARGV[2], 'createdAt', ARGV[3], 'digest', ARGV[4]); return 1`;
+const BIND_SERVICE = `-- ap:bind-service
+if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return -1 end
+local channel = redis.call('GET', KEYS[2]); if not channel then return -2 end
+local ok, parsed = pcall(cjson.decode, channel); if (ok and parsed.secret ~= ARGV[2]) or (not ok and channel ~= ARGV[2]) then return -3 end
+local owner = redis.call('GET', KEYS[3]); if owner then if owner == ARGV[3] then return 1 else return -4 end end
+if tonumber(redis.call('SCARD', KEYS[4])) >= tonumber(ARGV[4]) then return -5 end
+redis.call('SADD', KEYS[4], ARGV[5]); redis.call('SET', KEYS[3], ARGV[3]); return 1`;
+const UNBIND_SERVICE = `-- ap:unbind-service
+if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return -1 end
+local channel = redis.call('GET', KEYS[2]); if not channel then return -2 end
+local ok, parsed = pcall(cjson.decode, channel); if (ok and parsed.secret ~= ARGV[2]) or (not ok and channel ~= ARGV[2]) then return -3 end
+local owner = redis.call('GET', KEYS[3]); if not owner then return 1 end
+if owner ~= ARGV[3] then return -4 end
+redis.call('SREM', KEYS[4], ARGV[5]); redis.call('DEL', KEYS[3]); return 1`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -120,6 +138,67 @@ export class RedisBroker implements Broker {
     await this.command(() => this.redis.expire(this.accessKey(id), CHANNEL_TTL_SECONDS));
     const clientCredential = await this.createClientCredential(id, secret, undefined, validateScopes(access.scopes));
     return { id, secret, accessMode: "bearer" as const, exposureMode: exposure.mode, clientCredential };
+  }
+
+  async createService(name: string, rateLimitKey = "default", limit = 10) {
+    validateServiceName(name);
+    const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
+    const rateKey = `ap:rate:services:${rateLimitKey}:${bucket}`;
+    const count = await this.command(() => this.redis.incr(rateKey));
+    if (count === 1) await this.command(() => this.redis.expire(rateKey, CHANNEL_CREATION_WINDOW_SECONDS));
+    if (count > limit) throw new Error("SERVICE_RATE_LIMITED");
+    const generated = createService();
+    const result = await this.command(() => this.redis.eval<[string, string, string, string], number>(CREATE_SERVICE,
+      [this.serviceNameKey(name), this.serviceKey(generated.serviceId)],
+      [generated.serviceId, name, generated.createdAt, generated.digest.toString("hex")]));
+    if (result === 0) throw new Error("SERVICE_NAME_TAKEN");
+    return { serviceId: generated.serviceId, name, createdAt: generated.createdAt, secret: generated.secret };
+  }
+
+  async getService(name: string): Promise<ServiceSnapshot | null> {
+    validateServiceName(name);
+    const serviceId = await this.command(() => this.redis.get<string>(this.serviceNameKey(name)));
+    if (!serviceId) return null;
+    const record = await this.command(() => this.redis.hgetall<Record<string, string>>(this.serviceKey(serviceId)));
+    if (!record?.serviceId) return null;
+    const channelIds = await this.command(() => this.redis.smembers<string[]>(this.serviceInstancesKey(serviceId)));
+    if (!channelIds.length) return { service: { serviceId, name: record.name, createdAt: record.createdAt }, instances: [] };
+    const values = await this.command(() => this.redis.mget<(string | null)[]>(...channelIds.map((id) => this.channelKey(id))));
+    const instances = [];
+    const stale: string[] = [];
+    for (let index = 0; index < channelIds.length; index += 1) {
+      const stored = values[index];
+      if (!stored) { stale.push(channelIds[index]); continue; }
+      const channel = this.parseChannel(stored);
+      instances.push({ channel: channelIds[index], accessMode: channel.accessMode, exposureMode: channel.exposureMode });
+    }
+    if (stale.length) await this.command(() => this.redis.srem(this.serviceInstancesKey(serviceId), ...stale));
+    return { service: { serviceId, name: record.name, createdAt: record.createdAt }, instances };
+  }
+
+  async bindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string) {
+    const serviceId = await this.serviceIdForName(serviceName);
+    const result = await this.command(() => this.redis.eval<[string, string, string, string, string], number>(BIND_SERVICE,
+      [this.serviceKey(serviceId), this.channelKey(channelId), this.channelServiceKey(channelId), this.serviceInstancesKey(serviceId)],
+      [digestToken(serviceSecret).toString("hex"), channelSecret, serviceId, String(SERVICE_INSTANCE_LIMIT), channelId]));
+    if (result === -1) throw new Error("SERVICE_UNAUTHORIZED");
+    if (result === -2) throw new Error("CHANNEL_NOT_FOUND");
+    if (result === -3) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (result === -4) throw new Error("SERVICE_CHANNEL_CONFLICT");
+    if (result === -5) throw new Error("SERVICE_INSTANCE_LIMIT");
+    return serviceId;
+  }
+
+  async unbindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string) {
+    const serviceId = await this.serviceIdForName(serviceName);
+    const result = await this.command(() => this.redis.eval<[string, string, string, string, string], number>(UNBIND_SERVICE,
+      [this.serviceKey(serviceId), this.channelKey(channelId), this.channelServiceKey(channelId), this.serviceInstancesKey(serviceId)],
+      [digestToken(serviceSecret).toString("hex"), channelSecret, serviceId, "", channelId]));
+    if (result === -1) throw new Error("SERVICE_UNAUTHORIZED");
+    if (result === -2) throw new Error("CHANNEL_NOT_FOUND");
+    if (result === -3) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (result === -4) throw new Error("SERVICE_CHANNEL_CONFLICT");
+    return serviceId;
   }
 
   async authenticateClient(channelId: string, token: string) {
@@ -283,6 +362,18 @@ export class RedisBroker implements Broker {
 
   private channelKey(channelId: string) {
     return `ap:channel:${channelId}`;
+  }
+
+  private serviceNameKey(name: string) { return `ap:service:name:${name}`; }
+  private serviceKey(serviceId: string) { return `ap:service:${serviceId}`; }
+  private serviceInstancesKey(serviceId: string) { return `ap:service:${serviceId}:instances`; }
+  private channelServiceKey(channelId: string) { return `ap:channel:${channelId}:service`; }
+
+  private async serviceIdForName(name: string) {
+    validateServiceName(name);
+    const serviceId = await this.command(() => this.redis.get<string>(this.serviceNameKey(name)));
+    if (!serviceId) throw new Error("SERVICE_NOT_FOUND");
+    return serviceId;
   }
 
   private queueKey(channelId: string) {

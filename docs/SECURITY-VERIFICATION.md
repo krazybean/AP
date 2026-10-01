@@ -11,11 +11,12 @@
 
 The untouched baseline passed `npm test`: 60 tests, 56 passed, 4 skipped real-Redis tests, 0 failed. `npm run build` passed.
 
-Wave 2D adds local telemetry contract and adversarial tests. Final counts and the ending branch SHA are recorded in the delivery report. The required gates remain `npm test`, `npm run build`, `npm audit --audit-level=high`, `npm run security:scan`, `npm run security:load`, and CycloneDX SBOM generation with `npm sbom`.
+Wave 2D and AP 1.1 add local telemetry, named-service contract, binding, stale-pruning, Redis atomicity, and adversarial tests. Final counts and the ending branch SHA are recorded in the delivery report. The required gates remain `npm test`, `npm run build`, `npm audit --audit-level=high`, `npm run security:scan`, `npm run security:load`, and CycloneDX SBOM generation with `npm sbom`.
 
 ## Runtime verification status
 
 Fake-Redis and memory-broker regression coverage verifies queue/in-flight bounds, timeout release, response ownership, malformed IDs, body limits, header filtering, health caching, and controlled broker errors. The reproducible `npm run security:load` harness exercises 200 malformed/nonexistent-channel probes, 200 capacity-rejected known-channel requests, and an oversized request.
+Named-service coverage verifies the strict grammar, reserved names, one-time secret behavior, duplicate races, two-secret ownership, exclusive/idempotent binding, the 16-instance limit, stale pruning, and channel preservation after unbind.
 
 Live Redis queue capacity, in-flight capacity, timeout release, multi-instance sharing, Lua return values/atomicity, and bounded TTL cleanup were not run because credentials are unavailable. They must not be marked complete until `AP_REDIS_INTEGRATION=1 npm test` and live load/TTL checks run against a disposable test namespace.
 

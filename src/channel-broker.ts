@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes } from "./client-scopes.js";
+import { SERVICE_INSTANCE_LIMIT, createService, serviceSecretMatches, validateServiceName, type ServiceRecord, type ServiceSnapshot } from "./services.js";
 
 interface PendingExchange {
   request: PendingRequest;
@@ -27,6 +28,11 @@ interface CreationLimit {
   expiresAt: number;
 }
 
+interface Service extends ServiceRecord {
+  digest: Buffer;
+  instances: Set<string>;
+}
+
 const CHANNEL_CREATION_WINDOW_MS = 60 * 60 * 1_000;
 const CHANNEL_TTL_MS = 15 * 60 * 1_000;
 
@@ -34,6 +40,9 @@ export class ChannelBroker implements Broker {
   readonly type = "memory" as const;
   private readonly channels = new Map<string, Channel>();
   private readonly creationLimits = new Map<string, CreationLimit>();
+  private readonly serviceCreationLimits = new Map<string, CreationLimit>();
+  private readonly services = new Map<string, Service>();
+  private readonly serviceByChannel = new Map<string, string>();
 
   constructor(private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY) {}
 
@@ -76,6 +85,68 @@ export class ChannelBroker implements Broker {
     this.channels.set(id, channel);
     const clientCredential = access.mode === "bearer" ? this.addCredential(channel, undefined, access.scopes) : undefined;
     return { id, secret, accessMode: access.mode, exposureMode: exposure.mode, ...(clientCredential ? { clientCredential } : {}) };
+  }
+
+  async createService(name: string, rateLimitKey = "default", limit = 10) {
+    validateServiceName(name);
+    const now = Date.now();
+    const current = this.serviceCreationLimits.get(rateLimitKey);
+    const window = current && current.expiresAt > now ? current : { count: 0, expiresAt: now + 60 * 60 * 1_000 };
+    if (window.count >= limit) throw new Error("SERVICE_RATE_LIMITED");
+    window.count += 1;
+    this.serviceCreationLimits.set(rateLimitKey, window);
+    if (this.services.has(name)) throw new Error("SERVICE_NAME_TAKEN");
+    const generated = createService();
+    const service = { serviceId: generated.serviceId, name, createdAt: generated.createdAt, digest: generated.digest, instances: new Set<string>() };
+    this.services.set(name, service);
+    return { serviceId: service.serviceId, name, createdAt: service.createdAt, secret: generated.secret };
+  }
+
+  async getService(name: string): Promise<ServiceSnapshot | null> {
+    const service = this.services.get(name);
+    if (!service) return null;
+    const instances = [];
+    for (const channelId of service.instances) {
+      const channel = this.getChannel(channelId);
+      if (!channel) {
+        service.instances.delete(channelId);
+        this.serviceByChannel.delete(channelId);
+        continue;
+      }
+      instances.push({ channel: channel.id, accessMode: channel.accessMode, exposureMode: channel.exposureMode });
+    }
+    return { service: { serviceId: service.serviceId, name: service.name, createdAt: service.createdAt }, instances };
+  }
+
+  async bindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string) {
+    const service = this.services.get(serviceName);
+    if (!service) throw new Error("SERVICE_NOT_FOUND");
+    if (!serviceSecretMatches(serviceSecret, service.digest)) throw new Error("SERVICE_UNAUTHORIZED");
+    const channel = this.getChannel(channelId);
+    if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    if (channel.secret !== channelSecret) throw new Error("CHANNEL_UNAUTHORIZED");
+    const owner = this.serviceByChannel.get(channelId);
+    if (owner === serviceName) return service.serviceId;
+    if (owner) throw new Error("SERVICE_CHANNEL_CONFLICT");
+    if (service.instances.size >= SERVICE_INSTANCE_LIMIT) throw new Error("SERVICE_INSTANCE_LIMIT");
+    service.instances.add(channelId);
+    this.serviceByChannel.set(channelId, serviceName);
+    return service.serviceId;
+  }
+
+  async unbindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string) {
+    const service = this.services.get(serviceName);
+    if (!service) throw new Error("SERVICE_NOT_FOUND");
+    if (!serviceSecretMatches(serviceSecret, service.digest)) throw new Error("SERVICE_UNAUTHORIZED");
+    const channel = this.getChannel(channelId);
+    if (!channel) throw new Error("CHANNEL_NOT_FOUND");
+    if (channel.secret !== channelSecret) throw new Error("CHANNEL_UNAUTHORIZED");
+    const owner = this.serviceByChannel.get(channelId);
+    if (!owner) return service.serviceId;
+    if (owner !== serviceName) throw new Error("SERVICE_CHANNEL_CONFLICT");
+    service.instances.delete(channelId);
+    this.serviceByChannel.delete(channelId);
+    return service.serviceId;
   }
 
   async authenticateClient(channelId: string, token: string) {

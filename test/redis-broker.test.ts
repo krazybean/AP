@@ -8,6 +8,7 @@ class FakeRedis {
   private readonly values = new Map<string, unknown>();
   private readonly lists = new Map<string, unknown[]>();
   private readonly hashes = new Map<string, Map<string, unknown>>();
+  private readonly sets = new Map<string, Set<string>>();
   readonly counts = new Map<string, number>();
   failWith: Error | null = null;
   beforeCancel?: () => Promise<void>;
@@ -23,9 +24,11 @@ class FakeRedis {
 
   peek(key: string) { return this.lists.get(key)?.[0] as { id: string } | undefined; }
 
-  async set(key: string, value: unknown) {
+  async set(key: string, value: unknown, options?: { nx?: boolean }) {
     this.count("set");
+    if (options?.nx && this.values.has(key)) return null;
     this.values.set(key, value);
+    return "OK";
   }
 
   async hset(key: string, values: Record<string, unknown>) {
@@ -38,6 +41,39 @@ class FakeRedis {
   async hget<T>(key: string, field: string) {
     this.count("hget");
     return (this.hashes.get(key)?.get(field) as T | undefined) ?? null;
+  }
+
+  async hgetall<T>(key: string) {
+    this.count("hgetall");
+    return Object.fromEntries(this.hashes.get(key) ?? []) as T;
+  }
+
+  async sadd(key: string, ...members: string[]) {
+    this.count("sadd");
+    const set = this.sets.get(key) ?? new Set<string>();
+    const before = set.size;
+    members.forEach((member) => set.add(member));
+    this.sets.set(key, set);
+    return set.size - before;
+  }
+
+  async smembers<T>(key: string) {
+    this.count("smembers");
+    return [...(this.sets.get(key) ?? [])] as T;
+  }
+
+  async srem(key: string, ...members: string[]) {
+    this.count("srem");
+    const set = this.sets.get(key);
+    if (!set) return 0;
+    const before = set.size;
+    members.forEach((member) => set.delete(member));
+    return before - set.size;
+  }
+
+  async mget<T>(...keys: string[]) {
+    this.count("mget");
+    return keys.map((key) => (this.values.get(key) as string | undefined) ?? null) as T;
   }
 
   async hdel(key: string, ...fields: string[]) {
@@ -93,10 +129,37 @@ class FakeRedis {
   async del(key: string) {
     this.count("del");
     this.values.delete(key);
+    this.hashes.delete(key);
+    this.sets.delete(key);
   }
 
   async eval(script: string, keys: string[], args: string[]) {
     this.count("eval");
+    if (script.includes("ap:create-service")) {
+      if (this.values.has(keys[0])) return 0;
+      this.values.set(keys[0], args[0]);
+      this.hashes.set(keys[1], new Map([["serviceId", args[0]], ["name", args[1]], ["createdAt", args[2]], ["digest", args[3]]]));
+      return 1;
+    }
+    if (script.includes("ap:bind-service") || script.includes("ap:unbind-service")) {
+      const service = this.hashes.get(keys[0]);
+      if (service?.get("digest") !== args[0]) return -1;
+      const channel = this.values.get(keys[1]);
+      if (!channel) return -2;
+      let channelSecret: unknown;
+      try { channelSecret = JSON.parse(String(channel)).secret; } catch { channelSecret = channel; }
+      if (channelSecret !== args[1]) return -3;
+      const owner = this.values.get(keys[2]);
+      if (script.includes("ap:bind-service")) {
+        if (owner) return owner === args[2] ? 1 : -4;
+        const set = this.sets.get(keys[3]) ?? new Set<string>();
+        if (set.size >= Number(args[3])) return -5;
+        set.add(args[4]); this.sets.set(keys[3], set); this.values.set(keys[2], args[2]); return 1;
+      }
+      if (!owner) return 1;
+      if (owner !== args[2]) return -4;
+      this.sets.get(keys[3])?.delete(args[4]); this.values.delete(keys[2]); return 1;
+    }
     if (script.includes("ap:create-client")) {
       if (!this.values.has(keys[0])) return -1;
       const hash = this.hashes.get(keys[1])!;
@@ -239,6 +302,30 @@ test("Redis channel creation has a bounded command budget", async () => {
 
   assert.equal(redis.totalCommands(), 3, "INCR + EXPIRE + SET on the first bucket hit");
   assert.equal(broker.metrics().redisCommands, 3);
+});
+
+test("Redis named services use atomic uniqueness, exclusive bindings, and lazy stale pruning", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const created = await broker.createService("billing", "service-test", 1_000);
+  assert.match(created.secret, /^aps_/);
+  assert.equal((await broker.getService("billing"))?.instances.length, 0);
+  await assert.rejects(() => broker.createService("billing", "other", 1_000), /SERVICE_NAME_TAKEN/);
+
+  const channel = await broker.createChannel("service-channel", 1_000);
+  await broker.bindServiceInstance("billing", created.secret, channel.id, channel.secret);
+  await broker.bindServiceInstance("billing", created.secret, channel.id, channel.secret);
+  assert.equal((await broker.getService("billing"))?.instances.length, 1);
+  await redis.del(`ap:channel:${channel.id}`);
+  assert.equal((await broker.getService("billing"))?.instances.length, 0);
+  assert.ok((redis.counts.get("mget") ?? 0) >= 1);
+});
+
+test("Redis service name creation remains unique under concurrent claims", async () => {
+  const broker = new RedisBroker(new FakeRedis() as never);
+  const results = await Promise.allSettled(Array.from({ length: 100 }, () => broker.createService("race", "race", 1_000)));
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected" && String(result.reason).includes("SERVICE_NAME_TAKEN")).length, 99);
 });
 
 test("idle downstream polling is adaptive instead of a 100ms command storm", async () => {

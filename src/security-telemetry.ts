@@ -1,6 +1,7 @@
 export type AuthFailureReason = "missing" | "invalid" | "expired" | "revoked";
 export type InvalidHostReason = "malformed" | "invalid_channel" | "invalid_suffix";
 export type CapacityType = "queued" | "in_flight";
+export type ServiceAuthFailureReason = "missing" | "invalid";
 
 interface AuditBase {
   timestamp: string;
@@ -17,7 +18,10 @@ export type SecurityAuditEvent =
   | (AuditBase & { event: "origin.invalid_host"; reason: InvalidHostReason })
   | (AuditBase & { event: "origin.legacy_path_blocked"; channel: string })
   | (AuditBase & { event: "request.timeout"; channel: string })
-  | (AuditBase & { event: "broker.unavailable" | "broker.error"; reason: "unavailable" | "operation" });
+  | (AuditBase & { event: "broker.unavailable" | "broker.error"; reason: "unavailable" | "operation" })
+  | (AuditBase & { event: "service.created"; serviceId: string; name: string })
+  | (AuditBase & { event: "service.instance_bound" | "service.instance_unbound"; serviceId: string; channel: string })
+  | (AuditBase & { event: "service.auth_rejected"; reason: ServiceAuthFailureReason });
 
 export interface AuditSink {
   emit(event: SecurityAuditEvent): void;
@@ -50,6 +54,10 @@ const eventKeys: Record<SecurityAuditEvent["event"], string[]> = {
   "request.timeout": ["event", "timestamp", "requestId", "channel"],
   "broker.unavailable": ["event", "timestamp", "requestId", "reason"],
   "broker.error": ["event", "timestamp", "requestId", "reason"],
+  "service.created": ["event", "timestamp", "requestId", "serviceId", "name"],
+  "service.instance_bound": ["event", "timestamp", "requestId", "serviceId", "channel"],
+  "service.instance_unbound": ["event", "timestamp", "requestId", "serviceId", "channel"],
+  "service.auth_rejected": ["event", "timestamp", "requestId", "reason"],
 };
 
 const events = new Set(Object.keys(eventKeys));
@@ -79,6 +87,10 @@ export function isSecurityAuditEvent(value: unknown): value is SecurityAuditEven
   if ((record.event === "origin.legacy_path_blocked" || record.event === "request.timeout") && typeof record.channel !== "string") return false;
   if ((record.event === "broker.unavailable" || record.event === "broker.error") &&
       !(["unavailable", "operation"] as string[]).includes(String(record.reason))) return false;
+  if (record.event === "service.created" && (typeof record.serviceId !== "string" || typeof record.name !== "string")) return false;
+  if ((record.event === "service.instance_bound" || record.event === "service.instance_unbound") &&
+      (typeof record.serviceId !== "string" || typeof record.channel !== "string")) return false;
+  if (record.event === "service.auth_rejected" && (record.reason !== "missing" && record.reason !== "invalid")) return false;
   return true;
 }
 
@@ -94,6 +106,10 @@ export interface SecurityMetricsSnapshot {
   credentialsRevoked: number;
   channelsCreated: Record<"path_public" | "path_bearer" | "isolated_host_public" | "isolated_host_bearer", number>;
   auditEmissionFailures: number;
+  servicesCreated: number;
+  serviceBindings: number;
+  serviceUnbindings: number;
+  serviceAuthFailures: number;
 }
 
 export class SecurityMetrics {
@@ -109,6 +125,10 @@ export class SecurityMetrics {
     credentialsRevoked: 0,
     channelsCreated: { path_public: 0, path_bearer: 0, isolated_host_public: 0, isolated_host_bearer: 0 },
     auditEmissionFailures: 0,
+    servicesCreated: 0,
+    serviceBindings: 0,
+    serviceUnbindings: 0,
+    serviceAuthFailures: 0,
   };
 
   recordAuthFailure(reason: AuthFailureReason) { this.values.authFailures[reason] += 1; }
@@ -125,5 +145,9 @@ export class SecurityMetrics {
     this.values.channelsCreated[key] += 1;
   }
   recordAuditFailure() { this.values.auditEmissionFailures += 1; }
+  recordServiceCreated() { this.values.servicesCreated += 1; }
+  recordServiceBound() { this.values.serviceBindings += 1; }
+  recordServiceUnbound() { this.values.serviceUnbindings += 1; }
+  recordServiceAuthFailure() { this.values.serviceAuthFailures += 1; }
   snapshot(): SecurityMetricsSnapshot { return structuredClone(this.values); }
 }

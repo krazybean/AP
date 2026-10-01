@@ -102,6 +102,8 @@ Do not switch production to the local in-memory broker merely to bypass a Redis 
 
 ## Channel expiry and restart
 
+Service records are durable logical identities. Their instance index is bounded at 16 and stale channel members are pruned on exact-name discovery. Redis service creation uses an atomic name claim; service ownership digests and membership indexes are separate from channel transport records. Service deletion/name reuse are deferred, so operators should treat names as permanently claimed.
+
 Channels expire after 15 minutes without activity. A reconnecting application creates a new channel and shares its new public URL. Redis-backed channels and pending request ownership survive an AP process restart while their TTLs remain valid.
 
 ## Deployment failure

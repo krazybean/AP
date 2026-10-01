@@ -6,6 +6,7 @@ import { createBroker } from "./create-broker.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
+import { validateServiceName } from "./services.js";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "";
@@ -15,6 +16,10 @@ const CHANNEL_CREATION_LIMIT = Number.isInteger(Number(process.env.CHANNELS_PER_
   Number(process.env.CHANNELS_PER_IP_PER_HOUR) > 0
   ? Number(process.env.CHANNELS_PER_IP_PER_HOUR)
   : 10;
+const SERVICE_CREATION_LIMIT = Number.isInteger(Number(process.env.SERVICES_PER_IP_PER_HOUR)) &&
+  Number(process.env.SERVICES_PER_IP_PER_HOUR) > 0
+  ? Number(process.env.SERVICES_PER_IP_PER_HOUR)
+  : 10;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HEALTH_CACHE_MS = 1_000;
@@ -23,7 +28,7 @@ const HOP_BY_HOP = new Set([
   "trailer", "transfer-encoding", "upgrade",
 ]);
 const FORWARDED = new Set(["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]);
-const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret"]);
+const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret", "x-ap-service-secret"]);
 
 function filteredHeaders(headers: Record<string, string | string[] | undefined>, deny: Set<string>) {
   const blocked = new Set(deny);
@@ -196,6 +201,97 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
     return { brokerType: broker.type, ...metrics, security: securityMetrics.snapshot(), ...broker.metrics() };
   });
+
+  app.post<{ Body: { name?: unknown } }>("/services", async (request, reply) => {
+    const name = request.body?.name;
+    try {
+      validateServiceName(name);
+    } catch {
+      return reply.code(400).send({ error: "invalid_service_name" });
+    }
+    try {
+      const created = await broker.createService(name as string, request.ip, SERVICE_CREATION_LIMIT);
+      securityMetrics.recordServiceCreated();
+      audit(request, { event: "service.created", serviceId: created.serviceId, name: created.name });
+      return reply.code(201).send(created);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message === "SERVICE_NAME_TAKEN") return reply.code(409).send({ error: "service_name_taken" });
+      if (message === "SERVICE_RATE_LIMITED") return reply.header("retry-after", "3600").code(429).send({ error: "service_rate_limited" });
+      if (message === "INVALID_SERVICE_NAME") return reply.code(400).send({ error: "invalid_service_name" });
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
+  });
+
+  app.get<{ Params: { name: string } }>("/services/:name", async (request, reply) => {
+    try {
+      validateServiceName(request.params.name);
+    } catch {
+      return reply.code(404).send({ error: "service_not_found" });
+    }
+    try {
+      const snapshot = await broker.getService(request.params.name);
+      if (!snapshot) return reply.code(404).send({ error: "service_not_found" });
+      let baseDomain: string | undefined;
+      if (snapshot.instances.some((instance) => instance.exposureMode === "isolated-host")) {
+        try { baseDomain = normalizeBaseDomain(process.env.AP_CHANNEL_BASE_DOMAIN ?? ""); }
+        catch { return reply.code(503).send({ error: "isolated_host_not_configured" }); }
+      }
+      return {
+        ...snapshot.service,
+        instances: snapshot.instances.map((instance) => ({
+          channel: instance.channel,
+          url: instance.exposureMode === "isolated-host" ? buildChannelUrl(instance.channel, baseDomain!) : `/c/${instance.channel}`,
+          access: instance.accessMode,
+          exposure: instance.exposureMode,
+        })),
+      };
+    } catch (error) {
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
+  });
+
+  app.put<{ Params: { name: string; channel: string } }>("/services/:name/instances/:channel", async (request, reply) => {
+    return bindServiceInstance(request, reply, false);
+  });
+
+  app.delete<{ Params: { name: string; channel: string } }>("/services/:name/instances/:channel", async (request, reply) => {
+    return bindServiceInstance(request, reply, true);
+  });
+
+  async function bindServiceInstance(request: { id: string; params: { name: string; channel: string }; headers: Record<string, string | string[] | undefined> }, reply: any, unbind: boolean) {
+    try { validateServiceName(request.params.name); }
+    catch { return reply.code(404).send({ error: "service_not_found" }); }
+    const serviceSecret = typeof request.headers["x-ap-service-secret"] === "string" ? request.headers["x-ap-service-secret"] : "";
+    const channelSecret = typeof request.headers["x-ap-downstream-secret"] === "string" ? request.headers["x-ap-downstream-secret"] : "";
+    try {
+      const serviceId = unbind
+        ? await broker.unbindServiceInstance(request.params.name, serviceSecret, request.params.channel, channelSecret)
+        : await broker.bindServiceInstance(request.params.name, serviceSecret, request.params.channel, channelSecret);
+      if (unbind) {
+        securityMetrics.recordServiceUnbound();
+        audit(request, { event: "service.instance_unbound", serviceId, channel: request.params.channel });
+      } else {
+        securityMetrics.recordServiceBound();
+        audit(request, { event: "service.instance_bound", serviceId, channel: request.params.channel });
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message === "SERVICE_NOT_FOUND" || message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: message === "SERVICE_NOT_FOUND" ? "service_not_found" : "channel_not_found" });
+      if (message === "SERVICE_UNAUTHORIZED" || message === "CHANNEL_UNAUTHORIZED") {
+        securityMetrics.recordServiceAuthFailure();
+        audit(request, { event: "service.auth_rejected", reason: serviceSecret ? "invalid" : "missing" });
+        return reply.code(401).send({ error: message === "SERVICE_UNAUTHORIZED" ? "service_unauthorized" : "channel_unauthorized" });
+      }
+      if (message === "SERVICE_CHANNEL_CONFLICT") return reply.code(409).send({ error: "service_channel_conflict" });
+      if (message === "SERVICE_INSTANCE_LIMIT") return reply.header("retry-after", "1").code(429).send({ error: "service_instance_limit" });
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
+  }
 
   app.post("/channels", async (request, reply) => {
     const license = request.headers["x-app-license"];

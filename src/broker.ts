@@ -34,6 +34,8 @@ export interface CreatedChannel {
 }
 export type ClientCredential = import("./client-credentials.js").CreatedClientCredential;
 export type AuthenticatedClient = import("./client-credentials.js").ClientCredentialMetadata;
+export type CreatedService = import("./services.js").CreatedService;
+export type ServiceSnapshot = import("./services.js").ServiceSnapshot;
 
 export class BrokerUnavailableError extends Error {
   constructor(message = "BROKER_UNAVAILABLE", readonly retryAfterSeconds?: number, options?: ErrorOptions) {
@@ -54,6 +56,10 @@ export interface Broker {
   health(): Promise<void>;
   metrics(): BrokerMetrics;
   createChannel(rateLimitKey?: string, limit?: number, access?: AccessConfig, exposure?: ExposureConfig): Promise<CreatedChannel>;
+  createService(name: string, rateLimitKey?: string, limit?: number): Promise<CreatedService>;
+  getService(name: string): Promise<ServiceSnapshot | null>;
+  bindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string): Promise<string>;
+  unbindServiceInstance(serviceName: string, serviceSecret: string, channelId: string, channelSecret: string): Promise<string>;
   authenticateClient(channelId: string, token: string): Promise<AuthenticatedClient | undefined>;
   createClientCredential(channelId: string, secret: string, expiresAt?: number, scopes?: import("./client-scopes.js").ClientScope[]): Promise<ClientCredential>;
   revokeClientCredential(channelId: string, secret: string, credentialId: string): Promise<void>;
