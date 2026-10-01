@@ -48,10 +48,10 @@ test("service binding is idempotent, exclusive, bounded, and does not delete cha
   assert.equal(await broker.hasChannel(channel.id), true);
 
   for (let index = 0; index < SERVICE_INSTANCE_LIMIT; index += 1) {
-    const item = await broker.createChannel();
+    const item = await broker.createChannel("service-test", 100);
     await broker.bindServiceInstance("billing", service.secret, item.id, item.secret);
   }
-  const overflow = await broker.createChannel();
+  const overflow = await broker.createChannel("service-test", 100);
   await assert.rejects(
     () => broker.bindServiceInstance("billing", service.secret, overflow.id, overflow.secret),
     /SERVICE_INSTANCE_LIMIT/,
@@ -72,6 +72,18 @@ test("service HTTP API creates, discovers, binds, and unbinds without exposing s
 
   const channel = await app.inject({ method: "POST", url: "/channels" });
   const channelData = channel.json();
+  const wrongService = await app.inject({
+    method: "PUT",
+    url: `/services/billing/instances/${channelData.channel}`,
+    headers: { "x-ap-service-secret": "aps_wrong", "x-ap-downstream-secret": channelData.secret },
+  });
+  assert.equal(wrongService.statusCode, 401);
+  const wrongChannel = await app.inject({
+    method: "PUT",
+    url: `/services/billing/instances/${channelData.channel}`,
+    headers: { "x-ap-service-secret": service.secret, "x-ap-downstream-secret": "wrong" },
+  });
+  assert.equal(wrongChannel.statusCode, 401);
   const bound = await app.inject({
     method: "PUT",
     url: `/services/billing/instances/${channelData.channel}`,
