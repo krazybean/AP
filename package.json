@@ -5,7 +5,7 @@
   "description": "AI traffic plane for exposing private applications through ordinary HTTPS.",
   "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
