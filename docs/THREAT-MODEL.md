@@ -44,8 +44,12 @@ AP does not initiate connections into the private network. The downstream polls 
 | Cross-origin tenant risk | Opt-in exact per-channel hostnames, downstream cookie filtering, no AP cookies, and no permissive CORS | Wildcard DNS/TLS and deployment host routing must be configured; CSP/COOP/COEP/CORP remain downstream/deployment policy |
 | Dependency/CI compromise | Lockfile installs, audit, pinned actions, SBOM, supplemental scan | Enable GitHub secret scanning/dependency review externally |
 | Credential leakage | No credentials committed; logs redact auth headers; raw client tokens are returned once and digests are stored | Rotate outstanding deployment credential outside this repository |
+| Telemetry secret leakage or log injection | Fixed event schema, generated request IDs, explicit field construction, logger redaction, bounded reason dimensions, leakage and sink-failure tests | Default logs remain dependent on deployment retention/access controls |
+| Metric cardinality/resource abuse | In-process counters with fixed reason/mode keys and no attacker-controlled labels or queue | External log volume management remains operational |
 | Redis/provider outage | Health checks, broker errors mapped to 503, no fallback in explicit Redis mode | Provider recovery and alerting are operational gates |
 
 ## Explicit non-goals
 
 AP provides channel-scoped client authentication, transport-level method/path scopes, and opt-in isolated-host browser origins, but not tenant identity or business authorization. Scopes must not be interpreted as roles, users, tools, or application capabilities. Isolated creation requires `AP_CHANNEL_BASE_DOMAIN`; request host headers never generate public URLs.
+
+Wave 2D telemetry is intentionally local and privacy-bounded: it describes security decisions and lifecycle transitions without inspecting downstream payloads. The audit sink is an operational logging interface only; durable retention, SIEM export, and distributed tracing are non-goals.

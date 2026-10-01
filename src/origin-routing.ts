@@ -35,6 +35,15 @@ export function classifyChannelHost(host: string, configuredBaseDomain: string):
   return channel ?? "invalid";
 }
 
+export function classifyChannelHostFailure(host: string, configuredBaseDomain: string): "malformed" | "invalid_channel" | "invalid_suffix" | null {
+  const base = normalizeBaseDomain(configuredBaseDomain);
+  const candidate = hostWithoutPort(host);
+  if (!candidate) return host ? "malformed" : null;
+  if (candidate.endsWith(`.${base}`)) return "invalid_channel";
+  const firstLabel = candidate.split(".", 1)[0];
+  return UUID.test(firstLabel) && candidate.includes(`.${base}`) ? "invalid_suffix" : null;
+}
+
 export function buildChannelUrl(channel: string, configuredBaseDomain: string, mode: ExposureMode = "isolated-host") {
   const base = normalizeBaseDomain(configuredBaseDomain);
   if (mode !== "isolated-host" || !UUID.test(channel)) throw new Error("INVALID_CHANNEL_URL");

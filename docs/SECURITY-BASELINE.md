@@ -19,6 +19,7 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 | ASVS L2 input/output validation | PASS | UUID validation, body limit, response validation, header filtering; tests | Continue adversarial regression coverage |
 | ASVS L2 error handling/logging | PARTIAL | Broker failures become controlled 503s; metrics access controlled | Enable platform-native secret scanning and review production log sinks |
 | ASVS L2 dependency/configuration management | PASS | `npm ci`, lockfile, audit, pinned actions, SBOM | Credential rotation and GitHub settings are external |
+| ASVS L2 security telemetry privacy | PASS | Fixed audit-event unions, bounded security metrics, request-ID response header, redaction/leakage tests | Default audit sink is operational logging, not durable storage |
 
 ## Wave 2A/2B boundary
 
@@ -29,6 +30,10 @@ Scope matching is transport-only: exact paths, trailing subtree wildcards, and `
 ## Wave 2C boundary
 
 Wave 2C adds opt-in browser-origin isolation through trusted per-channel hostnames. The base domain is configuration-only, host parsing is exact and label-boundary checked, and isolated hosts route all paths to the selected downstream channel. It does not add permissive CORS, AP cookies, or generic browser response policies.
+
+## Wave 2D boundary
+
+Wave 2D adds local structured security audit events, bounded security metrics, and generated request correlation IDs. Telemetry is best-effort and cannot authorize, deny, route, or admit traffic. Channel identifiers may appear in audit records when useful for investigation, but never in metric dimensions.
 
 ## Wave 2
 

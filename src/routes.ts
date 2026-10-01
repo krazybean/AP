@@ -4,7 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
-import { buildChannelUrl, classifyChannelHost, normalizeBaseDomain } from "./origin-routing.js";
+import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
+import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "";
@@ -95,7 +96,19 @@ function parseExposure(body: unknown): ExposureConfig | null {
   return mode === "path" || mode === "isolated-host" ? { mode } : null;
 }
 
-export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker()) {
+export interface RouteOptions {
+  auditSink?: AuditSink;
+}
+
+export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker(), options: RouteOptions = {}) {
+  const securityMetrics = new SecurityMetrics();
+  const emitAudit = createAuditEmitter(options.auditSink ?? loggerAuditSink(app.log), () => securityMetrics.recordAuditFailure());
+  const audit = (request: { id: string }, event: { event: SecurityAuditEvent["event"]; [key: string]: unknown }) => {
+    emitAudit({ ...event, timestamp: new Date().toISOString(), requestId: request.id } as SecurityAuditEvent);
+  };
+  app.addHook("onSend", async (request, reply) => {
+    reply.header("x-ap-request-id", request.id);
+  });
   const metrics = {
     channelsCreated: 0,
     channelRateLimits: 0,
@@ -115,12 +128,16 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   let healthOk: boolean | undefined;
   let healthCheck: Promise<boolean> | undefined;
 
+  function requestId(request: { id: string }) {
+    return request.id;
+  }
+
   function hostClassification(request: { headers: Record<string, string | string[] | undefined> }) {
     const configured = process.env.AP_CHANNEL_BASE_DOMAIN;
     if (!configured) return null;
     try {
       const host = typeof request.headers.host === "string" ? request.headers.host : "";
-      return classifyChannelHost(host, configured);
+      return classifyChannelHost(host, configured) ?? classifyChannelHostFailure(host, configured);
     } catch {
       return "invalid" as const;
     }
@@ -129,7 +146,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   async function brokerHealthy() {
     if (healthOk !== undefined && Date.now() - healthAt < HEALTH_CACHE_MS) return healthOk;
     healthCheck ??= broker.health().then(() => true, (error) => {
-      app.log.error(error, "AP health check failed");
+      app.log.error({ event: "broker.health_failed" }, "AP health check failed");
       return false;
     });
     const result = await healthCheck;
@@ -139,9 +156,11 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     return result;
   }
 
-  function brokerUnavailable(error: unknown, reply: any) {
+  function brokerUnavailable(error: unknown, reply: any, request?: { id: string }) {
     if (!(error instanceof BrokerUnavailableError)) return false;
     metrics.brokerErrors += 1;
+    securityMetrics.recordBrokerError("unavailable");
+    if (request) audit(request, { event: "broker.unavailable", reason: "unavailable" });
     if (error.retryAfterSeconds !== undefined) {
       reply.header("retry-after", String(error.retryAfterSeconds));
     }
@@ -149,7 +168,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     return true;
   }
 
-  app.get("/health", async (_request, reply) => {
+  app.get("/health", async (request, reply) => {
     if (await brokerHealthy()) {
       return {
         status: "ok",
@@ -160,6 +179,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       };
     }
     metrics.brokerErrors += 1;
+    securityMetrics.recordBrokerError("operation");
+    audit(request, { event: "broker.error", reason: "operation" });
     return reply.code(503).send({
         status: "degraded",
         service: "ap",
@@ -173,7 +194,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     if (process.env.NODE_ENV === "production" && (!token || !tokenMatches(request.headers.authorization, token))) {
       return reply.code(404).send({ error: "not_found" });
     }
-    return { brokerType: broker.type, ...metrics, ...broker.metrics() };
+    return { brokerType: broker.type, ...metrics, security: securityMetrics.snapshot(), ...broker.metrics() };
   });
 
   app.post("/channels", async (request, reply) => {
@@ -204,6 +225,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       const { id: channel, secret, accessMode, clientCredential } = created;
       const exposureMode = created.exposureMode ?? exposure.mode;
       metrics.channelsCreated += 1;
+      securityMetrics.recordChannelCreated(accessMode, exposureMode);
+      audit(request, { event: "channel.created", channel, access: accessMode, exposure: exposureMode });
+      if (clientCredential) securityMetrics.recordCredentialCreated();
+      if (clientCredential) audit(request, { event: "credential.created", channel, credentialId: clientCredential.id });
       return reply.code(201).send({
         channel,
         secret,
@@ -220,8 +245,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         metrics.channelRateLimits += 1;
         return reply.header("retry-after", "3600").code(429).send({ error: "channel_rate_limited" });
       }
-      if (brokerUnavailable(error, reply)) return;
+      if (brokerUnavailable(error, reply, request)) return;
       metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   });
@@ -241,15 +268,23 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     try {
       const credential = await broker.createClientCredential(request.params.channel, downstreamSecret(request.headers), expiresAt, scopes);
       metrics.clientCredentialsCreated += 1;
+      securityMetrics.recordCredentialCreated();
+      audit(request, { event: "credential.created", channel: request.params.channel, credentialId: credential.id });
       return reply.code(201).send({ credentialId: credential.id, token: credential.token, createdAt: credential.createdAt, ...(credential.expiresAt === undefined ? {} : { expiresAt: new Date(credential.expiresAt).toISOString() }), ...(credential.scopes ? { scopes: credential.scopes } : {}) });
     } catch (error) {
       const message = errorMessage(error);
       if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
-      if (message === "CHANNEL_UNAUTHORIZED") return reply.code(401).send({ error: "channel_unauthorized" });
+      if (message === "CHANNEL_UNAUTHORIZED") {
+        audit(request, { event: "auth.downstream.rejected", channel: request.params.channel, reason: "invalid_secret" });
+        return reply.code(401).send({ error: "channel_unauthorized" });
+      }
       if (message === "CLIENT_CREDENTIAL_LIMIT") return reply.code(429).send({ error: "client_credential_limit" });
       if (message === "CLIENT_ACCESS_NOT_ENABLED") return reply.code(400).send({ error: "client_access_not_enabled" });
       if (message === "CLIENT_CREDENTIAL_EXPIRY_INVALID") return reply.code(400).send({ error: "invalid_expiration" });
-      if (brokerUnavailable(error, reply)) return;
+      if (brokerUnavailable(error, reply, request)) return;
+      metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   });
@@ -259,12 +294,20 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     try {
       await broker.revokeClientCredential(request.params.channel, downstreamSecret(request.headers), request.params.credentialId);
       metrics.clientCredentialsRevoked += 1;
+      securityMetrics.recordCredentialRevoked();
+      audit(request, { event: "credential.revoked", channel: request.params.channel, credentialId: request.params.credentialId });
       return reply.code(204).send();
     } catch (error) {
       const message = errorMessage(error);
       if (message === "CHANNEL_NOT_FOUND" || message === "CLIENT_CREDENTIAL_NOT_FOUND") return reply.code(404).send({ error: message === "CHANNEL_NOT_FOUND" ? "channel_not_found" : "credential_not_found" });
-      if (message === "CHANNEL_UNAUTHORIZED") return reply.code(401).send({ error: "channel_unauthorized" });
-      if (brokerUnavailable(error, reply)) return;
+      if (message === "CHANNEL_UNAUTHORIZED") {
+        audit(request, { event: "auth.downstream.rejected", channel: request.params.channel, reason: "invalid_secret" });
+        return reply.code(401).send({ error: "channel_unauthorized" });
+      }
+      if (brokerUnavailable(error, reply, request)) return;
+      metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   });
@@ -280,9 +323,13 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         return reply.code(404).send({ error: "channel_not_found" });
       }
       if (errorMessage(error) === "CHANNEL_UNAUTHORIZED") {
+        audit(request, { event: "auth.downstream.rejected", channel: request.params.channel, reason: "invalid_secret" });
         return reply.code(401).send({ error: "channel_unauthorized" });
       }
-      if (brokerUnavailable(error, reply)) return;
+      if (brokerUnavailable(error, reply, request)) return;
+      metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   });
@@ -313,9 +360,13 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         return reply.code(404).send({ error: "request_not_found" });
       }
       if (message === "CHANNEL_UNAUTHORIZED") {
+        audit(request, { event: "auth.downstream.rejected", channel: request.params.channel, reason: "invalid_secret" });
         return reply.code(401).send({ error: "channel_unauthorized" });
       }
-      if (brokerUnavailable(error, reply)) return;
+      if (brokerUnavailable(error, reply, request)) return;
+      metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   });
@@ -328,15 +379,20 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     return proxyToChannel(request.params.channel, requestPath(request.url, request.params.channel, "/"), request, reply);
   });
 
-  async function isolatedHostProxy(request: { url: string; headers: Record<string, string | string[] | undefined>; method: string; body?: unknown }, reply: any) {
+  async function isolatedHostProxy(request: { id: string; url: string; headers: Record<string, string | string[] | undefined>; method: string; body?: unknown }, reply: any) {
     const classification = hostClassification(request);
-    if (classification === "invalid") {
+    if (classification === "invalid" || classification === "malformed" || classification === "invalid_channel" || classification === "invalid_suffix") {
+      const reason = classification === "invalid" ? "malformed" : classification;
+      securityMetrics.recordInvalidHost(reason);
+      audit(request, { event: "origin.invalid_host", reason });
       return reply.code(404).send({ error: "not_found" });
     }
     if (!classification) return reply.code(404).send({ error: "not_found" });
     const channel = classification;
     const exposure = await broker.channelExposure(channel);
     if (exposure !== "isolated-host") {
+      securityMetrics.recordInvalidHost("invalid_channel");
+      audit(request, { event: "origin.invalid_host", reason: "invalid_channel" });
       return reply.code(404).send({ error: "not_found" });
     }
     return proxyToChannel(channel, request.url || "/", request, reply, true);
@@ -356,19 +412,22 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   async function proxyToChannel(
     channel: string,
     path: string,
-    request: { method: string; headers: Record<string, string | string[] | undefined>; body?: unknown },
+    request: { id: string; method: string; headers: Record<string, string | string[] | undefined>; body?: unknown },
     reply: { code: (statusCode: number) => any; header: (name: string, value: string) => any; send: (payload?: unknown) => any },
     isolatedHost = false,
   ) {
     if (!UUID.test(channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
       if (!isolatedHost && await broker.channelExposure(channel) === "isolated-host") {
+        securityMetrics.recordLegacyPathBlock();
+        audit(request, { event: "origin.legacy_path_blocked", channel });
         return reply.code(404).send({ error: "channel_not_found" });
       }
       let dispatchPath = path;
+      const accessToken = clientAccessToken(request.headers);
       try {
-        const authenticated = await broker.authenticateClient(channel, clientAccessToken(request.headers));
-        if (clientAccessToken(request.headers)) metrics.clientAuthSuccesses += 1;
+        const authenticated = await broker.authenticateClient(channel, accessToken);
+        if (accessToken) metrics.clientAuthSuccesses += 1;
         if (authenticated?.scopes) {
           let applicationPath: string;
           try {
@@ -379,6 +438,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
           }
           if (!scopeAllows(authenticated.scopes, request.method, applicationPath)) {
             metrics.authorizationDenied += 1;
+            securityMetrics.recordAuthorizationDenial();
+            audit(request, { event: "auth.scope_denied", channel, reason: "no_matching_scope" });
             return reply.code(403).send({ error: "client_access_forbidden" });
           }
           dispatchPath = canonicalDispatchPath(path);
@@ -388,9 +449,15 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         const message = errorMessage(error);
         if (message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: "channel_not_found" });
         metrics.clientAuthFailures += 1;
-        if (message === "CLIENT_CREDENTIAL_EXPIRED") return reply.code(401).send({ error: "client_access_expired" });
-        if (message === "CLIENT_CREDENTIAL_INVALID") return reply.code(401).send({ error: "client_access_unauthorized" });
-        if (brokerUnavailable(error, reply)) return;
+        if (message === "CLIENT_CREDENTIAL_EXPIRED" || message === "CLIENT_CREDENTIAL_INVALID") {
+          const reason = message === "CLIENT_CREDENTIAL_EXPIRED" ? "expired" : accessToken ? "invalid" : "missing";
+          securityMetrics.recordAuthFailure(reason);
+          audit(request, { event: "auth.client.rejected", channel, reason });
+          return reply.code(401).send({ error: message === "CLIENT_CREDENTIAL_EXPIRED" ? "client_access_expired" : "client_access_unauthorized" });
+        }
+        if (brokerUnavailable(error, reply, request)) return;
+        securityMetrics.recordBrokerError("operation");
+        audit(request, { event: "broker.error", reason: "operation" });
         throw error;
       }
       metrics.proxyRequests += 1;
@@ -401,7 +468,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         body: request.body,
       });
 
-      const safeHeaders = filteredHeaders(downstream.headers ?? {}, new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie"]));
+      const safeHeaders = filteredHeaders(downstream.headers ?? {}, new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie", "x-ap-request-id"]));
       for (const [name, value] of Object.entries(safeHeaders)) {
         reply.header(name, value as string);
       }
@@ -411,6 +478,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     } catch (error) {
       const message = errorMessage(error);
       if (error instanceof BrokerCapacityError) {
+        securityMetrics.recordCapacity("queued");
+        audit(request, { event: "channel.capacity_rejected", channel, type: "queued" });
         return reply.header("retry-after", "1").code(429).send({ error: "channel_capacity_exceeded" });
       }
       if (message === "CHANNEL_NOT_FOUND") {
@@ -418,10 +487,14 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       }
       if (message === "DOWNSTREAM_TIMEOUT") {
         metrics.proxyTimeouts += 1;
+        securityMetrics.recordTimeout();
+        audit(request, { event: "request.timeout", channel });
         return reply.code(504).send({ error: "downstream_timeout" });
       }
-      if (brokerUnavailable(error, reply)) return;
+      if (brokerUnavailable(error, reply, request)) return;
       metrics.brokerErrors += 1;
+      securityMetrics.recordBrokerError("operation");
+      audit(request, { event: "broker.error", reason: "operation" });
       throw error;
     }
   }
