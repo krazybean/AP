@@ -20,6 +20,7 @@ This maps applicable OWASP API Security Top 10 (2023) risks and selected OWASP A
 | ASVS L2 error handling/logging | PARTIAL | Broker failures become controlled 503s; metrics access controlled | Enable platform-native secret scanning and review production log sinks |
 | ASVS L2 dependency/configuration management | PASS | `npm ci`, lockfile, audit, pinned actions, SBOM | Credential rotation and GitHub settings are external |
 | ASVS L2 security telemetry privacy | PASS | Fixed audit-event unions, bounded security metrics, request-ID response header, redaction/leakage tests | Default audit sink is operational logging, not durable storage |
+| AP 1.1 named service identity | PASS | Strict names, opaque IDs, one-time `aps_` secret, digest-only storage, atomic Redis uniqueness, exact discovery, two-secret binding, 16-instance cap | Service deletion/name reuse and live Redis evidence remain deferred |
 
 ## Wave 2A/2B boundary
 
@@ -34,6 +35,10 @@ Wave 2C adds opt-in browser-origin isolation through trusted per-channel hostnam
 ## Wave 2D boundary
 
 Wave 2D adds local structured security audit events, bounded security metrics, and generated request correlation IDs. Telemetry is best-effort and cannot authorize, deny, route, or admit traffic. Channel identifiers may appear in audit records when useful for investigation, but never in metric dimensions.
+
+## AP 1.1 boundary
+
+Named services are logical ownership/discovery records above channels. They do not replace channel secrets, client credentials, browser isolation, or application authorization. Exact discovery exposes only live instance metadata and AP URLs; service ownership is required for binding and unbinding.
 
 ## Wave 2
 

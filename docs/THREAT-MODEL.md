@@ -47,9 +47,13 @@ AP does not initiate connections into the private network. The downstream polls 
 | Telemetry secret leakage or log injection | Fixed event schema, generated request IDs, explicit field construction, logger redaction, bounded reason dimensions, leakage and sink-failure tests | Default logs remain dependent on deployment retention/access controls |
 | Metric cardinality/resource abuse | In-process counters with fixed reason/mode keys and no attacker-controlled labels or queue | External log volume management remains operational |
 | Redis/provider outage | Health checks, broker errors mapped to 503, no fallback in explicit Redis mode | Provider recovery and alerting are operational gates |
+| Service ownership and binding confusion | Opaque service IDs, one-time ownership secret, digest-only storage, two-secret binding, one-service-per-channel rule, atomic Redis membership, 16-instance cap | Service deletion, name reuse, and distributed edge throttling are deferred/operational |
+| Service discovery leakage | Exact-name lookup only; no global list; response excludes secrets, digests, tokens, headers, bodies, and Redis metadata | Service names are not treated as confidential identifiers |
 
 ## Explicit non-goals
 
 AP provides channel-scoped client authentication, transport-level method/path scopes, and opt-in isolated-host browser origins, but not tenant identity or business authorization. Scopes must not be interpreted as roles, users, tools, or application capabilities. Isolated creation requires `AP_CHANNEL_BASE_DOMAIN`; request host headers never generate public URLs.
 
 Wave 2D telemetry is intentionally local and privacy-bounded: it describes security decisions and lifecycle transitions without inspecting downstream payloads. The audit sink is an operational logging interface only; durable retention, SIEM export, and distributed tracing are non-goals.
+
+AP 1.1 adds logical services without changing channel security. The service ownership secret is distinct from `Authorization`, client access tokens, and downstream channel secrets; it is consumed only by service management endpoints and is never forwarded.

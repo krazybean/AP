@@ -253,6 +253,8 @@ Do not expose secrets in the APP landing page or capability responses. Channel c
 
 ## Current lifecycle limitation
 
+Named services are created with `POST /services`, discovered with exact `GET /services/:name`, and populated with the two-secret bind endpoint. Discovery is not a credential grant: the returned instance URL still enforces the channel's access mode, and the service secret is never returned by discovery. A service has at most 16 channel instances; service deletion and name reuse are not implemented.
+
 Channel creation exists; durable application identity and channel reclaim do not yet. A downstream should currently expect to create a new channel when starting rather than depending on a permanent public URL.
 
 The current implementations expire channels after 15 minutes without activity. Reconnecting applications create a new channel. This lifetime is an implementation default, not yet a stable protocol guarantee, and durable channel reclaim is not implemented.
