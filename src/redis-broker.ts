@@ -416,11 +416,11 @@ export class RedisBroker implements Broker {
     await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
   }
 
-  private parseChannel(value: string) {
+  private parseChannel(value: unknown) {
     try {
-      const parsed = JSON.parse(value) as { secret?: unknown; accessMode?: unknown; exposureMode?: unknown };
+      const parsed = typeof value === "string" ? JSON.parse(value) : value as { secret?: unknown; accessMode?: unknown; exposureMode?: unknown };
       if (typeof parsed.secret === "string") return { secret: parsed.secret, accessMode: parsed.accessMode === "bearer" ? "bearer" : "public", exposureMode: parsed.exposureMode === "isolated-host" ? "isolated-host" : "path" } as const;
     } catch {}
-    return { secret: value, accessMode: "public" as const, exposureMode: "path" as const };
+    return { secret: typeof value === "string" ? value : "", accessMode: "public" as const, exposureMode: "path" as const };
   }
 }

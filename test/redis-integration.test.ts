@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { Redis } from "@upstash/redis";
 
 import { RedisBroker } from "../src/redis-broker.js";
+import { buildTestApp } from "./build-test-app.js";
 
 const integrationOptions = { skip: process.env.AP_REDIS_INTEGRATION !== "1" };
 
@@ -87,5 +88,30 @@ test("Redis broker preserves a channel across broker instances", integrationOpti
     assert.deepEqual(await responsePromise, { statusCode: 200, body: { pong: true } });
   } finally {
     await cleanup(redis, channel);
+  }
+});
+
+test("Redis-backed HTTP auth accepts the secret returned by channel creation", integrationOptions, async () => {
+  const redis = Redis.fromEnv();
+  const creator = new RedisBroker(redis);
+  const poller = new RedisBroker(redis);
+  const app = buildTestApp(poller);
+  const created = await app.inject({ method: "POST", url: "/channels" });
+  const { channel, secret } = created.json() as { channel: string; secret: string };
+
+  try {
+    assert.equal(created.statusCode, 201);
+    const responsePromise = creator.dispatch(channel, request());
+    const next = await app.inject({
+      method: "GET",
+      url: `/channels/${channel}/next`,
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    assert.equal(next.statusCode, 200);
+    await poller.respond(channel, secret, next.json().id, { statusCode: 200, body: "ok" });
+    assert.deepEqual(await responsePromise, { statusCode: 200, body: "ok" });
+  } finally {
+    await redis.del(`ap:channel:${channel}`, `ap:channel:${channel}:requests`);
+    await app.close();
   }
 });
