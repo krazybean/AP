@@ -5,6 +5,7 @@ import { Redis } from "@upstash/redis";
 import {
   BrokerUnavailableError,
   BrokerCapacityError,
+  ChannelRateLimitError,
   DEFAULT_BROKER_CAPACITY,
   type BrokerCapacity,
   type Broker,
@@ -55,6 +56,12 @@ local parsed = cjson.decode(record); redis.call('HDEL', KEYS[1], 'c:' .. ARGV[1]
 const CREATE_SERVICE = `-- ap:create-service
 if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
 redis.call('SET', KEYS[1], ARGV[1]); redis.call('HSET', KEYS[2], 'serviceId', ARGV[1], 'name', ARGV[2], 'createdAt', ARGV[3], 'digest', ARGV[4]); return 1`;
+const ADMIT_CHANNEL = `-- ap:admit-channel
+local count = tonumber(redis.call('GET', KEYS[1]) or '0');
+if count >= tonumber(ARGV[2]) then return { 0, math.max(redis.call('TTL', KEYS[1]), 0) } end
+count = redis.call('INCR', KEYS[1]);
+if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return { 1, tonumber(ARGV[1]) }`;
 const BIND_SERVICE = `-- ap:bind-service
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return -1 end
 local channel = redis.call('GET', KEYS[2]); if not channel then return -2 end
@@ -122,17 +129,15 @@ export class RedisBroker implements Broker {
   }
 
   async createChannel(rateLimitKey = "default", limit = 10, access: import("./broker.js").AccessConfig = { mode: "public" }, exposure: ExposureConfig = { mode: "path" }) {
-    const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
-    const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}:${bucket}`;
-    const count = await this.command(() => this.redis.incr(rateLimitKeyName));
-    if (count === 1) {
-      await this.command(() => this.redis.expire(rateLimitKeyName, CHANNEL_CREATION_WINDOW_SECONDS));
-    }
-    if (count > limit) throw new Error("CHANNEL_RATE_LIMITED");
-
     const id = randomUUID();
     const secret = randomBytes(32).toString("base64url");
+    const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}`;
     await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secret, accessMode: access.mode, exposureMode: exposure.mode }), { ex: CHANNEL_TTL_SECONDS }));
+    const admission = await this.command(() => this.redis.eval<[string, string], [number, number]>(ADMIT_CHANNEL, [rateLimitKeyName], [String(CHANNEL_CREATION_WINDOW_SECONDS), String(limit)]));
+    if (admission[0] === 0) {
+      await this.command(() => this.redis.del(this.channelKey(id)));
+      throw new ChannelRateLimitError(admission[1]);
+    }
     if (access.mode === "public") return { id, secret, accessMode: "public" as const, exposureMode: exposure.mode };
     await this.command(() => this.redis.hset(this.accessKey(id), { mode: "bearer", count: 0 }));
     await this.command(() => this.redis.expire(this.accessKey(id), CHANNEL_TTL_SECONDS));

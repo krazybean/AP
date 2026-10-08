@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
-import { BrokerCapacityError, BrokerUnavailableError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
+import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
@@ -10,6 +11,12 @@ import { validateServiceName } from "./services.js";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "";
+}
+
+export function sourceRateLimitKey(ip: string | undefined) {
+  const value = ip?.trim().toLowerCase() || "unknown";
+  const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+  return mapped && isIP(mapped) === 4 ? mapped : value;
 }
 
 const CHANNEL_CREATION_LIMIT = Number.isInteger(Number(process.env.CHANNELS_PER_IP_PER_HOUR)) &&
@@ -317,7 +324,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
 
     try {
-      const created = await broker.createChannel(request.ip, CHANNEL_CREATION_LIMIT, access, exposure);
+      const created = await broker.createChannel(sourceRateLimitKey(request.ip), CHANNEL_CREATION_LIMIT, access, exposure);
       const { id: channel, secret, accessMode, clientCredential } = created;
       const exposureMode = created.exposureMode ?? exposure.mode;
       metrics.channelsCreated += 1;
@@ -337,9 +344,9 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         },
       });
     } catch (error) {
-      if (errorMessage(error) === "CHANNEL_RATE_LIMITED") {
+      if (error instanceof ChannelRateLimitError || errorMessage(error) === "CHANNEL_RATE_LIMITED") {
         metrics.channelRateLimits += 1;
-        return reply.header("retry-after", "3600").code(429).send({ error: "channel_rate_limited" });
+        return reply.header("retry-after", String(error instanceof ChannelRateLimitError ? error.retryAfterSeconds : 3600)).code(429).send({ error: "channel_rate_limited" });
       }
       if (brokerUnavailable(error, reply, request)) return;
       metrics.brokerErrors += 1;

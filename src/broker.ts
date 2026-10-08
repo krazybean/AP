@@ -51,6 +51,13 @@ export class BrokerCapacityError extends Error {
   }
 }
 
+export class ChannelRateLimitError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super("CHANNEL_RATE_LIMITED");
+    this.name = "ChannelRateLimitError";
+  }
+}
+
 export interface Broker {
   readonly type: "memory" | "redis";
   health(): Promise<void>;

@@ -141,6 +141,12 @@ class FakeRedis {
       this.hashes.set(keys[1], new Map([["serviceId", args[0]], ["name", args[1]], ["createdAt", args[2]], ["digest", args[3]]]));
       return 1;
     }
+    if (script.includes("ap:admit-channel")) {
+      const count = Number(this.values.get(keys[0]) ?? 0);
+      if (count >= Number(args[1])) return [0, 3600];
+      this.values.set(keys[0], count + 1);
+      return [1, 3600];
+    }
     if (script.includes("ap:bind-service") || script.includes("ap:unbind-service")) {
       const service = this.hashes.get(keys[0]);
       if (service?.get("digest") !== args[0]) return -1;
@@ -300,8 +306,16 @@ test("Redis channel creation has a bounded command budget", async () => {
 
   await broker.createChannel("budget-test");
 
-  assert.equal(redis.totalCommands(), 3, "INCR + EXPIRE + SET on the first bucket hit");
-  assert.equal(broker.metrics().redisCommands, 3);
+  assert.equal(redis.totalCommands(), 2, "SET + atomic quota admission");
+  assert.equal(broker.metrics().redisCommands, 2);
+});
+
+test("Redis channel rate limits count successful creations only and return the remaining delay", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  for (let index = 0; index < 10; index += 1) await broker.createChannel("rate-test");
+  await assert.rejects(() => broker.createChannel("rate-test"), { name: "ChannelRateLimitError", retryAfterSeconds: 3600 });
+  await assert.rejects(() => broker.createChannel("rate-test"), { name: "ChannelRateLimitError", retryAfterSeconds: 3600 });
 });
 
 test("Redis named services use atomic uniqueness, exclusive bindings, and lazy stale pruning", async () => {
@@ -338,7 +352,7 @@ test("idle downstream polling is adaptive instead of a 100ms command storm", asy
 
   const commands = redis.totalCommands() - before;
   assert.equal(commands, 4, "GET auth + three atomic capacity-aware polls");
-  assert.equal(redis.counts.get("eval"), 3);
+  assert.equal(redis.counts.get("eval"), 4, "one channel-admission script plus three polling scripts");
   assert.equal(broker.metrics().redisPollCommands, 3);
 });
 

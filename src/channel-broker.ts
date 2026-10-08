@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { BrokerCapacityError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
+import { BrokerCapacityError, ChannelRateLimitError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes } from "./client-scopes.js";
 import { SERVICE_INSTANCE_LIMIT, createService, serviceSecretMatches, validateServiceName, type ServiceRecord, type ServiceSnapshot } from "./services.js";
@@ -66,7 +66,7 @@ export class ChannelBroker implements Broker {
     const window = current && current.expiresAt > now
       ? current
       : { count: 0, expiresAt: now + CHANNEL_CREATION_WINDOW_MS };
-    if (window.count >= limit) throw new Error("CHANNEL_RATE_LIMITED");
+    if (window.count >= limit) throw new ChannelRateLimitError(Math.max(0, Math.ceil((window.expiresAt - now) / 1_000)));
     window.count += 1;
     this.creationLimits.set(rateLimitKey, window);
 

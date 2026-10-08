@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { ChannelBroker } from "../src/channel-broker.js";
 import { buildTestApp } from "./build-test-app.js";
+import { sourceRateLimitKey } from "../src/routes.js";
 
 test("channel proxies a request to a polling downstream", async () => {
   const app = buildTestApp();
@@ -240,6 +241,11 @@ test("channel creation is rate limited per source", async () => {
   assert.equal(limited.headers["retry-after"], "3600");
   assert.deepEqual(limited.json(), { error: "channel_rate_limited" });
   await app.close();
+});
+
+test("source rate-limit keys normalize IPv4-mapped addresses", () => {
+  assert.equal(sourceRateLimitKey("::ffff:192.0.2.1"), "192.0.2.1");
+  assert.equal(sourceRateLimitKey("2001:DB8::1"), "2001:db8::1");
 });
 
 test("channel creation can mandate an application license", async () => {
