@@ -1,9 +1,13 @@
+// Vercel Fastify entrypoint (Vercel picks src/app.* first, and it must import fastify directly).
+// Do not add a default export here: Vercel treats a default export as the
+// request handler, and a Fastify instance is not one, so every request fails
+// with INTERNAL_FUNCTION_INVOCATION_FAILED and no runtime logs.
 import Fastify from "fastify";
 
+import { appOptions } from "./fastify-app.js";
 import { registerRoutes } from "./routes.js";
-import { requestBodyLimit } from "./http-config.js";
 
-const app = Fastify({ trustProxy: process.env.VERCEL === "1", logger: { redact: ["req.headers.authorization", "req.headers.x-ap-access-token", "req.headers.x-ap-downstream-secret", "req.headers.x-app-license", "req.headers.cookie", "req.headers.set-cookie"] }, bodyLimit: requestBodyLimit() });
+const app = Fastify(appOptions());
 registerRoutes(app);
 
 if (process.env.VERCEL === "1") {
@@ -13,5 +17,3 @@ if (process.env.VERCEL === "1") {
     app.log.error(error, "AP failed to start");
   });
 }
-
-export default app;
