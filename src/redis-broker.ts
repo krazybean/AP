@@ -213,7 +213,7 @@ export class RedisBroker implements Broker {
     if (channel.accessMode !== "bearer") return undefined;
     const record = await this.command(() => this.redis.hget<string>(this.accessKey(channelId), `d:${digestToken(token).toString("hex")}`));
     if (!record) throw new Error("CLIENT_CREDENTIAL_INVALID");
-    const metadata = JSON.parse(record) as ClientCredentialMetadata & { digest: string };
+    const metadata = (typeof record === "string" ? JSON.parse(record) : record) as ClientCredentialMetadata & { digest: string };
     if (metadata.expiresAt !== undefined && metadata.expiresAt <= Date.now()) throw new Error("CLIENT_CREDENTIAL_EXPIRED");
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
     await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));

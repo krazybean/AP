@@ -12,6 +12,7 @@ class FakeRedis {
   readonly counts = new Map<string, number>();
   failWith: Error | null = null;
   beforeCancel?: () => Promise<void>;
+  returnParsedHashValues = false;
 
   private count(name: string) {
     this.counts.set(name, (this.counts.get(name) ?? 0) + 1);
@@ -40,7 +41,8 @@ class FakeRedis {
 
   async hget<T>(key: string, field: string) {
     this.count("hget");
-    return (this.hashes.get(key)?.get(field) as T | undefined) ?? null;
+    const value = this.hashes.get(key)?.get(field);
+    return (this.returnParsedHashValues && typeof value === "string" ? JSON.parse(value) : value as T | undefined) ?? null;
   }
 
   async hgetall<T>(key: string) {
@@ -246,6 +248,16 @@ test("Redis broker protects client credential state and enforces lifecycle", asy
   await broker.revokeClientCredential(created.id, created.secret, second.id);
   await assert.rejects(() => broker.authenticateClient(created.id, second.token), /CLIENT_CREDENTIAL_INVALID/);
   assert.notEqual(created.clientCredential.token, created.secret);
+});
+
+test("Redis broker accepts already-parsed client metadata", async () => {
+  const redis = new FakeRedis();
+  redis.returnParsedHashValues = true;
+  const broker = new RedisBroker(redis as never);
+  const created = await broker.createChannel("parsed-metadata", 10, { mode: "bearer" });
+
+  const authenticated = await broker.authenticateClient(created.id, created.clientCredential!.token);
+  assert.equal(authenticated?.id, created.clientCredential?.id);
 });
 
 test("Redis broker returns scoped metadata without storing a raw token", async () => {
