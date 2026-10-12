@@ -577,7 +577,11 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       }
 
       metrics.proxyResponses += 1;
-      return reply.code(downstream.statusCode ?? 200).send(downstream.body);
+      return reply.code(downstream.statusCode ?? 200).send(
+        downstream.body !== null && typeof downstream.body === "object"
+          ? JSON.stringify(downstream.body)
+          : downstream.body,
+      );
     } catch (error) {
       const message = errorMessage(error);
       if (error instanceof BrokerCapacityError) {

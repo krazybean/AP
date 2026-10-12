@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 .binder/
 
+# Project-local QMD index and generated SQLite state
+/.qmd/*.sqlite*
+/.qmd/index.yml
+

@@ -85,6 +85,39 @@ test("root and nested POST requests preserve paths, headers, and body", async ()
   await app.close();
 });
 
+test("JSON object response bodies are forwarded as JSON", async () => {
+  const app = buildTestApp();
+  const created = await app.inject({ method: "POST", url: "/channels" });
+  const { channel, secret } = created.json() as { channel: string; secret: string };
+
+  for (const body of [{ protocol: "APP/1.0" }, { projects: [] }]) {
+    const publicRequest = app.inject({
+      method: "GET",
+      url: `/c/${channel}`,
+    });
+    const next = await app.inject({
+      method: "GET",
+      url: `/channels/${channel}/next`,
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    const pending = next.json() as { id: string };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/channels/${channel}/responses/${pending.id}`,
+      headers: { authorization: `Bearer ${secret}` },
+      payload: { statusCode: 200, headers: { "content-type": "application/json" }, body },
+    });
+    assert.equal(response.statusCode, 202);
+
+    const completed = await publicRequest;
+    assert.equal(completed.statusCode, 200);
+    assert.deepEqual(completed.json(), body);
+  }
+
+  await app.close();
+});
+
 test("empty downstream polling returns 204 and incorrect secret returns 401", async () => {
   const broker = new ChannelBroker();
   const { id: channel, secret } = await broker.createChannel();
