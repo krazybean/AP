@@ -1,4 +1,4 @@
-import app from "./app.js";
+import "./app.js";
 import { renderStartupBanner } from "./startup-banner.js";
 
 const port = Number(process.env.PORT ?? 4117);
@@ -10,9 +10,4 @@ renderStartupBanner({
   environment: process.env.NODE_ENV ?? "development",
   host,
   port,
-});
-
-void app.listen({ port, host }).catch((error) => {
-  app.log.error(error, "AP failed to start");
-  process.exitCode = 1;
 });
