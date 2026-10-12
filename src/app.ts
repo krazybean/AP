@@ -7,7 +7,9 @@ const app = Fastify({ trustProxy: process.env.VERCEL === "1", logger: { redact: 
 registerRoutes(app);
 
 if (process.env.VERCEL === "1") {
-  void app.listen({ port: 3000 }).catch((error) => {
+  const port = Number(process.env.PORT ?? 3000);
+  const host = process.env.HOST ?? "0.0.0.0";
+  void app.listen({ port, host }).catch((error) => {
     app.log.error(error, "AP failed to start");
     process.exitCode = 1;
   });
