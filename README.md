@@ -1,6 +1,6 @@
 # AP — AI Traffic Plane
 
-**Give private AI-capable applications a public HTTPS surface.**
+[![CI](https://github.com/krazybean/AP/actions/workflows/ci.yml/badge.svg)](https://github.com/krazybean/AP/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen.svg)](package.json) **Give private AI-capable applications a public HTTPS surface.**
 
 > **AP routes intelligence. It does not provide intelligence.**
 
@@ -264,7 +264,7 @@ The current shape is an interoperability baseline, **not yet a frozen APP 1.0 sc
 
 ### Run AP locally
 
-Node.js 20.x is the currently validated runtime.
+Node.js 24.x is the currently validated runtime.
 
 ```bash
 npm install
