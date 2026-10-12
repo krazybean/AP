@@ -9,10 +9,7 @@ registerRoutes(app);
 if (process.env.VERCEL === "1") {
   const port = Number(process.env.PORT ?? 3000);
   const host = process.env.HOST ?? "0.0.0.0";
-  void app.listen({ port, host }).catch((error) => {
-    app.log.error(error, "AP failed to start");
-    process.exitCode = 1;
-  });
+  await app.listen({ port, host });
 }
 
 export default app;
