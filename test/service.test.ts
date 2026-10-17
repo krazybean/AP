@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { SERVICE_INSTANCE_LIMIT, validateServiceName } from "../src/services.js";
 import { buildTestApp } from "./build-test-app.js";
 
@@ -14,8 +14,8 @@ test("service names use the strict DNS-safe grammar and reserve control names", 
   }
 });
 
-test("memory broker creates an opaque service and returns its secret only at creation", async () => {
-  const broker = new ChannelBroker();
+test("broker creates an opaque service and returns its secret only at creation", async () => {
+  const broker = testBroker();
   const created = await broker.createService("billing");
   assert.match(created.serviceId, /^[0-9a-f-]{36}$/);
   assert.match(created.secret, /^aps_[A-Za-z0-9_-]{43}$/);
@@ -32,7 +32,7 @@ test("memory broker creates an opaque service and returns its secret only at cre
 });
 
 test("service binding is idempotent, exclusive, bounded, and does not delete channels", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const service = await broker.createService("billing");
   const other = await broker.createService("shipping");
   const channel = await broker.createChannel();
@@ -59,7 +59,7 @@ test("service binding is idempotent, exclusive, bounded, and does not delete cha
 });
 
 test("service HTTP API creates, discovers, binds, and unbinds without exposing secrets", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const app = buildTestApp(broker);
   const created = await app.inject({ method: "POST", url: "/services", payload: { name: "billing" } });
   assert.equal(created.statusCode, 201);

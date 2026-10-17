@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { buildTestApp } from "./build-test-app.js";
+import { testBrokerType } from "./test-broker.js";
 
 test("GET /health reports AP is healthy", async () => {
   const app = buildTestApp();
@@ -16,9 +17,10 @@ test("GET /health reports AP is healthy", async () => {
     status: "ok",
     service: "ap",
     broker: "ok",
-    brokerType: "memory",
+    brokerType: testBrokerType,
     queuedRequests: 0,
     inFlightRequests: 0,
+    ...(testBrokerType === "redis" ? { redisCommands: 1, redisPollCommands: 0 } : {}),
   });
 
   await app.close();
@@ -51,7 +53,7 @@ test("GET /metrics reports operational counters", async () => {
 
   assert.equal(response.statusCode, 200);
   assert.deepEqual(response.json(), {
-    brokerType: "memory",
+    brokerType: testBrokerType,
     channelsCreated: 0,
     channelRateLimits: 0,
     proxyRequests: 0,
@@ -84,6 +86,7 @@ test("GET /metrics reports operational counters", async () => {
     },
     queuedRequests: 0,
     inFlightRequests: 0,
+    ...(testBrokerType === "redis" ? { redisCommands: 0, redisPollCommands: 0 } : {}),
   });
   await app.close();
 });

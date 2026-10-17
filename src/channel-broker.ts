@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import { BrokerCapacityError, ChannelRateLimitError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
-import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
+import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes } from "./client-scopes.js";
 import { SERVICE_INSTANCE_LIMIT, createService, serviceSecretMatches, validateServiceName, type ServiceRecord, type ServiceSnapshot } from "./services.js";
 
@@ -14,7 +14,7 @@ interface PendingExchange {
 
 interface Channel {
   id: string;
-  secret: string;
+  secretDigest: Buffer;
   expiresAt: number;
   queue: PendingExchange[];
   waiters: Array<(request: PendingRequest | null) => void>;
@@ -74,7 +74,7 @@ export class ChannelBroker implements Broker {
     const secret = randomBytes(32).toString("base64url");
     const channel: Channel = {
       id,
-      secret,
+      secretDigest: digestToken(secret),
       expiresAt: Date.now() + CHANNEL_TTL_MS,
       queue: [],
       waiters: [],
@@ -124,7 +124,7 @@ export class ChannelBroker implements Broker {
     if (!serviceSecretMatches(serviceSecret, service.digest)) throw new Error("SERVICE_UNAUTHORIZED");
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== channelSecret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(channelSecret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     const owner = this.serviceByChannel.get(channelId);
     if (owner === serviceName) return service.serviceId;
     if (owner) throw new Error("SERVICE_CHANNEL_CONFLICT");
@@ -140,7 +140,7 @@ export class ChannelBroker implements Broker {
     if (!serviceSecretMatches(serviceSecret, service.digest)) throw new Error("SERVICE_UNAUTHORIZED");
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== channelSecret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(channelSecret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     const owner = this.serviceByChannel.get(channelId);
     if (!owner) return service.serviceId;
     if (owner !== serviceName) throw new Error("SERVICE_CHANNEL_CONFLICT");
@@ -167,7 +167,7 @@ export class ChannelBroker implements Broker {
   async createClientCredential(channelId: string, secret: string, expiresAt?: number, scopes?: import("./client-scopes.js").ClientScope[]) {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now())) throw new Error("CLIENT_CREDENTIAL_EXPIRY_INVALID");
     const credential = this.addCredential(channel, expiresAt, validateScopes(scopes));
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
@@ -177,7 +177,7 @@ export class ChannelBroker implements Broker {
   async revokeClientCredential(channelId: string, secret: string, credentialId: string) {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     if (!channel.credentials.delete(credentialId)) throw new Error("CLIENT_CREDENTIAL_NOT_FOUND");
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
   }
@@ -221,7 +221,7 @@ export class ChannelBroker implements Broker {
   async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const inFlight = channel.queue.filter((item) => (item.request as PendingRequest & { delivered?: boolean }).delivered).length;
@@ -249,7 +249,7 @@ export class ChannelBroker implements Broker {
   async respond(channelId: string, secret: string, requestId: string, response: DownstreamResponse) {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
-    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const index = channel.queue.findIndex((item) => item.request.id === requestId);

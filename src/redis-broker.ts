@@ -14,7 +14,7 @@ import {
   type PendingRequest,
   type ExposureConfig,
 } from "./broker.js";
-import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, type ClientCredentialMetadata } from "./client-credentials.js";
+import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes, type ClientScope } from "./client-scopes.js";
 import { SERVICE_INSTANCE_LIMIT, createService, validateServiceName, type ServiceSnapshot } from "./services.js";
 
@@ -65,19 +65,31 @@ return { 1, tonumber(ARGV[1]) }`;
 const BIND_SERVICE = `-- ap:bind-service
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return -1 end
 local channel = redis.call('GET', KEYS[2]); if not channel then return -2 end
-local ok, parsed = pcall(cjson.decode, channel); if (ok and parsed.secret ~= ARGV[2]) or (not ok and channel ~= ARGV[2]) then return -3 end
+local ok, parsed = pcall(cjson.decode, channel); if not ok or type(parsed) ~= 'table' or parsed.secretDigest ~= ARGV[2] then return -3 end
 local owner = redis.call('GET', KEYS[3]); if owner then if owner == ARGV[3] then return 1 else return -4 end end
 if tonumber(redis.call('SCARD', KEYS[4])) >= tonumber(ARGV[4]) then return -5 end
 redis.call('SADD', KEYS[4], ARGV[5]); redis.call('SET', KEYS[3], ARGV[3]); return 1`;
 const UNBIND_SERVICE = `-- ap:unbind-service
 if redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1] then return -1 end
 local channel = redis.call('GET', KEYS[2]); if not channel then return -2 end
-local ok, parsed = pcall(cjson.decode, channel); if (ok and parsed.secret ~= ARGV[2]) or (not ok and channel ~= ARGV[2]) then return -3 end
+local ok, parsed = pcall(cjson.decode, channel); if not ok or type(parsed) ~= 'table' or parsed.secretDigest ~= ARGV[2] then return -3 end
 local owner = redis.call('GET', KEYS[3]); if not owner then return 1 end
 if owner ~= ARGV[3] then return -4 end
 redis.call('SREM', KEYS[4], ARGV[5]); redis.call('DEL', KEYS[3]); return 1`;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function decodeJson<T>(value: unknown): T {
+  return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+// Without automatic deserialization, HGETALL returns the raw [field, value, ...] reply.
+function hashReply(value: Record<string, string> | string[] | null): Record<string, string> | null {
+  if (!Array.isArray(value)) return value;
+  const record: Record<string, string> = {};
+  for (let index = 0; index + 1 < value.length; index += 2) record[value[index]] = value[index + 1];
+  return record;
+}
 
 function retryAfterSeconds(error: unknown) {
   if (!error || typeof error !== "object") return undefined;
@@ -113,7 +125,13 @@ export class RedisBroker implements Broker {
   private redisCommands = 0;
   private redisPollCommands = 0;
 
-  constructor(private readonly redis = Redis.fromEnv(), private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY) {}
+  // Values come back as raw strings: Upstash's automatic JSON deserialization
+  // returned objects where this broker expected strings (see 3b7a9ed, 99c86b8).
+  constructor(
+    private readonly redis = Redis.fromEnv({ automaticDeserialization: false }),
+    private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY,
+    private readonly keyPrefix = "ap:",
+  ) {}
 
   async health() {
     await this.command(() => this.redis.ping());
@@ -131,8 +149,8 @@ export class RedisBroker implements Broker {
   async createChannel(rateLimitKey = "default", limit = 10, access: import("./broker.js").AccessConfig = { mode: "public" }, exposure: ExposureConfig = { mode: "path" }) {
     const id = randomUUID();
     const secret = randomBytes(32).toString("base64url");
-    const rateLimitKeyName = `ap:rate:channels:${rateLimitKey}`;
-    await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secret, accessMode: access.mode, exposureMode: exposure.mode }), { ex: CHANNEL_TTL_SECONDS }));
+    const rateLimitKeyName = `${this.keyPrefix}rate:channels:${rateLimitKey}`;
+    await this.command(() => this.redis.set(this.channelKey(id), JSON.stringify({ secretDigest: digestToken(secret).toString("hex"), accessMode: access.mode, exposureMode: exposure.mode }), { ex: CHANNEL_TTL_SECONDS }));
     const admission = await this.command(() => this.redis.eval<[string, string], [number, number]>(ADMIT_CHANNEL, [rateLimitKeyName], [String(CHANNEL_CREATION_WINDOW_SECONDS), String(limit)]));
     if (admission[0] === 0) {
       await this.command(() => this.redis.del(this.channelKey(id)));
@@ -148,7 +166,7 @@ export class RedisBroker implements Broker {
   async createService(name: string, rateLimitKey = "default", limit = 10) {
     validateServiceName(name);
     const bucket = Math.floor(Date.now() / (CHANNEL_CREATION_WINDOW_SECONDS * 1_000));
-    const rateKey = `ap:rate:services:${rateLimitKey}:${bucket}`;
+    const rateKey = `${this.keyPrefix}rate:services:${rateLimitKey}:${bucket}`;
     const count = await this.command(() => this.redis.incr(rateKey));
     if (count === 1) await this.command(() => this.redis.expire(rateKey, CHANNEL_CREATION_WINDOW_SECONDS));
     if (count > limit) throw new Error("SERVICE_RATE_LIMITED");
@@ -164,7 +182,7 @@ export class RedisBroker implements Broker {
     validateServiceName(name);
     const serviceId = await this.command(() => this.redis.get<string>(this.serviceNameKey(name)));
     if (!serviceId) return null;
-    const record = await this.command(() => this.redis.hgetall<Record<string, string>>(this.serviceKey(serviceId)));
+    const record = hashReply(await this.command(() => this.redis.hgetall(this.serviceKey(serviceId))) as Record<string, string> | string[] | null);
     if (!record?.serviceId) return null;
     const channelIds = await this.command(() => this.redis.smembers<string[]>(this.serviceInstancesKey(serviceId)));
     if (!channelIds.length) return { service: { serviceId, name: record.name, createdAt: record.createdAt }, instances: [] };
@@ -185,7 +203,7 @@ export class RedisBroker implements Broker {
     const serviceId = await this.serviceIdForName(serviceName);
     const result = await this.command(() => this.redis.eval<[string, string, string, string, string], number>(BIND_SERVICE,
       [this.serviceKey(serviceId), this.channelKey(channelId), this.channelServiceKey(channelId), this.serviceInstancesKey(serviceId)],
-      [digestToken(serviceSecret).toString("hex"), channelSecret, serviceId, String(SERVICE_INSTANCE_LIMIT), channelId]));
+      [digestToken(serviceSecret).toString("hex"), digestToken(channelSecret).toString("hex"), serviceId, String(SERVICE_INSTANCE_LIMIT), channelId]));
     if (result === -1) throw new Error("SERVICE_UNAUTHORIZED");
     if (result === -2) throw new Error("CHANNEL_NOT_FOUND");
     if (result === -3) throw new Error("CHANNEL_UNAUTHORIZED");
@@ -198,7 +216,7 @@ export class RedisBroker implements Broker {
     const serviceId = await this.serviceIdForName(serviceName);
     const result = await this.command(() => this.redis.eval<[string, string, string, string, string], number>(UNBIND_SERVICE,
       [this.serviceKey(serviceId), this.channelKey(channelId), this.channelServiceKey(channelId), this.serviceInstancesKey(serviceId)],
-      [digestToken(serviceSecret).toString("hex"), channelSecret, serviceId, "", channelId]));
+      [digestToken(serviceSecret).toString("hex"), digestToken(channelSecret).toString("hex"), serviceId, "", channelId]));
     if (result === -1) throw new Error("SERVICE_UNAUTHORIZED");
     if (result === -2) throw new Error("CHANNEL_NOT_FOUND");
     if (result === -3) throw new Error("CHANNEL_UNAUTHORIZED");
@@ -213,7 +231,7 @@ export class RedisBroker implements Broker {
     if (channel.accessMode !== "bearer") return undefined;
     const record = await this.command(() => this.redis.hget<string>(this.accessKey(channelId), `d:${digestToken(token).toString("hex")}`));
     if (!record) throw new Error("CLIENT_CREDENTIAL_INVALID");
-    const metadata = (typeof record === "string" ? JSON.parse(record) : record) as ClientCredentialMetadata & { digest: string };
+    const metadata = decodeJson<ClientCredentialMetadata & { digest: string }>(record);
     if (metadata.expiresAt !== undefined && metadata.expiresAt <= Date.now()) throw new Error("CLIENT_CREDENTIAL_EXPIRED");
     await this.command(() => this.redis.expire(this.channelKey(channelId), CHANNEL_TTL_SECONDS));
     await this.command(() => this.redis.expire(this.accessKey(channelId), CHANNEL_TTL_SECONDS));
@@ -271,13 +289,13 @@ export class RedisBroker implements Broker {
     try {
       while (Date.now() < deadline) {
         const response = await this.command(
-          () => this.redis.get<DownstreamResponse>(responseKey),
+          () => this.redis.get<string | DownstreamResponse>(responseKey),
           true,
         );
         if (response !== null) {
           await this.command(() => this.redis.del(responseKey));
           this.removeRequestMetric(pending.id);
-          return response;
+          return decodeJson<DownstreamResponse>(response);
         }
         await this.pollDelay(deadline, pollIndex++);
       }
@@ -287,10 +305,10 @@ export class RedisBroker implements Broker {
         [JSON.stringify(pending), String(CHANNEL_TTL_SECONDS)]));
       this.removeRequestMetric(pending.id);
       if (cancelled === 2) {
-        const response = await this.command(() => this.redis.get<DownstreamResponse>(responseKey));
+        const response = await this.command(() => this.redis.get<string | DownstreamResponse>(responseKey));
         if (response !== null) {
           await this.command(() => this.redis.del(responseKey));
-          return response;
+          return decodeJson<DownstreamResponse>(response);
         }
       }
       throw new Error("DOWNSTREAM_TIMEOUT");
@@ -321,7 +339,7 @@ export class RedisBroker implements Broker {
         [String(this.capacity.maxInFlightPerChannel), String(CHANNEL_TTL_SECONDS)]), true);
       if (typeof rawPending === "number") throw new Error("CHANNEL_NOT_FOUND");
       if (rawPending) {
-        const pending = typeof rawPending === "string" ? JSON.parse(rawPending) as PendingRequest : rawPending as PendingRequest;
+        const pending = decodeJson<PendingRequest>(rawPending);
         this.queuedRequests = Math.max(0, this.queuedRequests - 1);
         this.inFlightRequests += 1;
         this.requestStates.set(pending.id, "inFlight");
@@ -366,13 +384,13 @@ export class RedisBroker implements Broker {
   }
 
   private channelKey(channelId: string) {
-    return `ap:channel:${channelId}`;
+    return `${this.keyPrefix}channel:${channelId}`;
   }
 
-  private serviceNameKey(name: string) { return `ap:service:name:${name}`; }
-  private serviceKey(serviceId: string) { return `ap:service:${serviceId}`; }
-  private serviceInstancesKey(serviceId: string) { return `ap:service:${serviceId}:instances`; }
-  private channelServiceKey(channelId: string) { return `ap:channel:${channelId}:service`; }
+  private serviceNameKey(name: string) { return `${this.keyPrefix}service:name:${name}`; }
+  private serviceKey(serviceId: string) { return `${this.keyPrefix}service:${serviceId}`; }
+  private serviceInstancesKey(serviceId: string) { return `${this.keyPrefix}service:${serviceId}:instances`; }
+  private channelServiceKey(channelId: string) { return `${this.channelKey(channelId)}:service`; }
 
   private async serviceIdForName(name: string) {
     validateServiceName(name);
@@ -382,20 +400,20 @@ export class RedisBroker implements Broker {
   }
 
   private queueKey(channelId: string) {
-    return `ap:channel:${channelId}:requests`;
+    return `${this.channelKey(channelId)}:requests`;
   }
 
   private responseKey(channelId: string, requestId: string) {
-    return `ap:channel:${channelId}:response:${requestId}`;
+    return `${this.channelKey(channelId)}:response:${requestId}`;
   }
 
   private pendingKey(channelId: string, requestId: string) {
-    return `ap:channel:${channelId}:pending:${requestId}`;
+    return `${this.pendingPrefix(channelId)}${requestId}`;
   }
 
-  private pendingPrefix(channelId: string) { return `ap:channel:${channelId}:pending:`; }
-  private statsKey(channelId: string) { return `ap:channel:${channelId}:capacity`; }
-  private accessKey(channelId: string) { return `ap:channel:${channelId}:access`; }
+  private pendingPrefix(channelId: string) { return `${this.channelKey(channelId)}:pending:`; }
+  private statsKey(channelId: string) { return `${this.channelKey(channelId)}:capacity`; }
+  private accessKey(channelId: string) { return `${this.channelKey(channelId)}:access`; }
 
   private removeRequestMetric(requestId: string) {
     const state = this.requestStates.get(requestId);
@@ -405,10 +423,15 @@ export class RedisBroker implements Broker {
   }
 
   private async assertChannelSecret(channelId: string, secret: string) {
-    const storedSecret = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
-    if (storedSecret === null) throw new Error("CHANNEL_NOT_FOUND");
-    const channel = this.parseChannel(storedSecret);
-    if (channel.secret !== secret) throw new Error("CHANNEL_UNAUTHORIZED");
+    const stored = await this.command(() => this.redis.get<string>(this.channelKey(channelId)));
+    if (stored === null) throw new Error("CHANNEL_NOT_FOUND");
+    const channel = this.parseChannel(stored);
+    if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (channel.legacy) {
+      // Rewrite records created before secrets were hashed so the plaintext leaves Redis.
+      const { accessMode, exposureMode, secretDigest } = channel;
+      await this.command(() => this.redis.set(this.channelKey(channelId), JSON.stringify({ secretDigest: secretDigest.toString("hex"), accessMode, exposureMode }), { keepTtl: true }));
+    }
     return channel;
   }
 
@@ -417,10 +440,18 @@ export class RedisBroker implements Broker {
   }
 
   private parseChannel(value: unknown) {
+    let parsed: { secretDigest?: unknown; secret?: unknown; accessMode?: unknown; exposureMode?: unknown } | undefined;
     try {
-      const parsed = typeof value === "string" ? JSON.parse(value) : value as { secret?: unknown; accessMode?: unknown; exposureMode?: unknown };
-      if (typeof parsed.secret === "string") return { secret: parsed.secret, accessMode: parsed.accessMode === "bearer" ? "bearer" : "public", exposureMode: parsed.exposureMode === "isolated-host" ? "isolated-host" : "path" } as const;
+      parsed = decodeJson(value);
     } catch {}
-    return { secret: typeof value === "string" ? value : "", accessMode: "public" as const, exposureMode: "path" as const };
+    const accessMode = parsed?.accessMode === "bearer" ? "bearer" as const : "public" as const;
+    const exposureMode = parsed?.exposureMode === "isolated-host" ? "isolated-host" as const : "path" as const;
+    if (typeof parsed?.secretDigest === "string") {
+      return { secretDigest: Buffer.from(parsed.secretDigest, "hex"), accessMode, exposureMode, legacy: false };
+    }
+    // Legacy records stored the plaintext secret, or were the bare secret string.
+    const legacySecret = typeof parsed?.secret === "string" ? parsed.secret : typeof value === "string" && !parsed ? value : "";
+    // An all-zero digest never matches, so a record with no secret rejects every caller.
+    return { secretDigest: legacySecret ? digestToken(legacySecret) : Buffer.alloc(32), accessMode, exposureMode, legacy: legacySecret !== "" };
   }
 }

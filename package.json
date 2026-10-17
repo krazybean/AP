@@ -17,6 +17,7 @@
     "start": "tsx src/server.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "test": "node --import tsx --test test/*.test.ts",
+    "test:redis": "AP_TEST_BROKER=redis AP_REDIS_INTEGRATION=1 node --import tsx --test test/*.test.ts",
     "mock:downstream": "tsx scripts/mock-downstream.ts",
     "security:scan": "node scripts/secret-scan.mjs",
     "security:load": "node --import tsx scripts/security-load.ts"

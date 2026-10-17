@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import Fastify from "fastify";
 import { test } from "node:test";
 
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { BrokerCapacityError, BrokerUnavailableError } from "../src/broker.js";
 import { isSecurityAuditEvent, type AuditSink, type SecurityAuditEvent } from "../src/security-telemetry.js";
 import { registerRoutes } from "../src/routes.js";
 
 const baseDomain = "channels.example.test";
 
-function appWithSink(events: SecurityAuditEvent[], broker = new ChannelBroker(), sink: AuditSink = { emit: (event) => events.push(event) }) {
+function appWithSink(events: SecurityAuditEvent[], broker = testBroker(), sink: AuditSink = { emit: (event) => events.push(event) }) {
   const app = Fastify({ logger: false });
   registerRoutes(app, broker, { auditSink: sink });
   return app;
@@ -64,7 +64,7 @@ test("every response has a generated correlation ID and audits reuse it", async 
 test("telemetry failure cannot change authentication or authorization decisions", async () => {
   const events: SecurityAuditEvent[] = [];
   const sink: AuditSink = { emit: () => { throw new Error("AUDIT_SINK_DOWN"); } };
-  const app = appWithSink(events, new ChannelBroker(), sink);
+  const app = appWithSink(events, testBroker(), sink);
   const created = await app.inject({ method: "POST", url: "/channels", payload: { access: { mode: "bearer", scopes: [{ methods: ["GET"], path: "/allowed" }] } } });
   const body = created.json();
   assert.equal((await app.inject({ method: "GET", url: `/c/${body.channel}/denied`, headers: { "x-ap-access-token": body.access.token } })).statusCode, 403);
@@ -120,7 +120,7 @@ test("origin telemetry uses bounded reasons without host or path labels", async 
 
 test("capacity and timeout telemetry are emitted once at the HTTP boundary", async () => {
   const capacityEvents: SecurityAuditEvent[] = [];
-  const capacityBroker = new ChannelBroker();
+  const capacityBroker = testBroker();
   const capacityChannel = await capacityBroker.createChannel();
   capacityBroker.dispatch = async () => { throw new BrokerCapacityError(); };
   const capacityApp = appWithSink(capacityEvents, capacityBroker);
@@ -129,7 +129,7 @@ test("capacity and timeout telemetry are emitted once at the HTTP boundary", asy
   await capacityApp.close();
 
   const timeoutEvents: SecurityAuditEvent[] = [];
-  const timeoutBroker = new ChannelBroker();
+  const timeoutBroker = testBroker();
   const timeoutChannel = await timeoutBroker.createChannel();
   timeoutBroker.dispatch = async () => { throw new Error("DOWNSTREAM_TIMEOUT"); };
   const timeoutApp = appWithSink(timeoutEvents, timeoutBroker);
@@ -140,7 +140,7 @@ test("capacity and timeout telemetry are emitted once at the HTTP boundary", asy
 
 test("broker failures are audited without exposing provider details", async () => {
   const events: SecurityAuditEvent[] = [];
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const channel = await broker.createChannel();
   broker.dispatch = async () => { throw new BrokerUnavailableError("REDIS_URL_SECRET_MARKER"); };
   const app = appWithSink(events, broker);

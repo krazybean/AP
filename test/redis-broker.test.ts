@@ -154,9 +154,9 @@ class FakeRedis {
       if (service?.get("digest") !== args[0]) return -1;
       const channel = this.values.get(keys[1]);
       if (!channel) return -2;
-      let channelSecret: unknown;
-      try { channelSecret = JSON.parse(String(channel)).secret; } catch { channelSecret = channel; }
-      if (channelSecret !== args[1]) return -3;
+      let channelDigest: unknown;
+      try { channelDigest = JSON.parse(String(channel)).secretDigest; } catch { channelDigest = undefined; }
+      if (channelDigest !== args[1]) return -3;
       const owner = this.values.get(keys[2]);
       if (script.includes("ap:bind-service")) {
         if (owner) return owner === args[2] ? 1 : -4;
@@ -426,4 +426,41 @@ test("Redis provider quota failures become service-level broker failures", async
     broker.health(),
     (error: unknown) => error instanceof BrokerUnavailableError,
   );
+});
+
+test("Redis channel records store a secret digest, never the secret", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const { id, secret } = await broker.createChannel();
+  const stored = JSON.parse(String(await redis.get(`ap:channel:${id}`)));
+
+  assert.equal("secret" in stored, false);
+  assert.match(stored.secretDigest, /^[0-9a-f]{64}$/);
+  assert.equal(JSON.stringify(stored).includes(secret), false);
+  assert.equal(await broker.next(id, secret, 0), null);
+  await assert.rejects(broker.next(id, `${secret}x`, 0), /CHANNEL_UNAUTHORIZED/);
+  await assert.rejects(broker.next(id, "", 0), /CHANNEL_UNAUTHORIZED/);
+});
+
+test("Redis legacy plaintext channel records still authenticate and are rewritten as digests", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const id = "c0a80101-0000-4000-8000-000000000001";
+  await redis.set(`ap:channel:${id}`, JSON.stringify({ secret: "legacy-secret", accessMode: "public", exposureMode: "path" }));
+
+  await assert.rejects(broker.next(id, "wrong", 0), /CHANNEL_UNAUTHORIZED/);
+  assert.equal(await broker.next(id, "legacy-secret", 0), null);
+  const migrated = JSON.parse(String(await redis.get(`ap:channel:${id}`)));
+  assert.equal("secret" in migrated, false);
+  assert.match(migrated.secretDigest, /^[0-9a-f]{64}$/);
+  assert.equal(await broker.next(id, "legacy-secret", 0), null);
+});
+
+test("Redis channel records without a secret reject an empty secret", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const id = "c0a80101-0000-4000-8000-000000000002";
+  await redis.set(`ap:channel:${id}`, JSON.stringify({ accessMode: "public" }));
+
+  await assert.rejects(broker.next(id, "", 0), /CHANNEL_UNAUTHORIZED/);
 });

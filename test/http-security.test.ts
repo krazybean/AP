@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { BrokerCapacityError, type Broker } from "../src/broker.js";
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 const validId = "c0a80101-0000-4000-8000-000000000001";
@@ -43,7 +43,7 @@ test("malformed channel and request UUIDs return 404 before broker access", asyn
 });
 
 test("well-formed but nonexistent channel IDs still return 404", async () => {
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   assert.equal((await app.inject({ method: "GET", url: `/c/${validId}` })).statusCode, 404);
   assert.equal((await app.inject({ method: "GET", url: `/channels/${validId}/next` })).statusCode, 404);
   await app.close();

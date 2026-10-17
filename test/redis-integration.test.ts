@@ -93,8 +93,10 @@ test("Redis broker preserves a channel across broker instances", integrationOpti
 
 test("Redis-backed HTTP auth accepts the secret returned by channel creation", integrationOptions, async () => {
   const redis = Redis.fromEnv();
-  const creator = new RedisBroker(redis);
-  const poller = new RedisBroker(redis);
+  // A unique prefix keeps the shared 127.0.0.1 rate limit from carrying over between runs.
+  const prefix = `ap-test:${randomUUID()}:`;
+  const creator = new RedisBroker(redis, undefined, prefix);
+  const poller = new RedisBroker(redis, undefined, prefix);
   const app = buildTestApp(poller);
   const created = await app.inject({ method: "POST", url: "/channels" });
   const { channel, secret } = created.json() as { channel: string; secret: string };
@@ -111,7 +113,7 @@ test("Redis-backed HTTP auth accepts the secret returned by channel creation", i
     await poller.respond(channel, secret, next.json().id, { statusCode: 200, body: "ok" });
     assert.deepEqual(await responsePromise, { statusCode: 200, body: "ok" });
   } finally {
-    await redis.del(`ap:channel:${channel}`, `ap:channel:${channel}:requests`);
+    await redis.del(`${prefix}channel:${channel}`, `${prefix}channel:${channel}:requests`);
     await app.close();
   }
 });
