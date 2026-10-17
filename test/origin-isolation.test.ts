@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { buildChannelUrl, normalizeBaseDomain, parseChannelHost } from "../src/origin-routing.js";
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 const baseDomain = "channels.example.test";
@@ -36,7 +36,7 @@ test("isolated URLs use the configured base and exact host shape", () => {
 test("path creation stays path-based and isolated creation is configuration-bound", async () => {
   const previous = process.env.AP_CHANNEL_BASE_DOMAIN;
   process.env.AP_CHANNEL_BASE_DOMAIN = baseDomain;
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   const path = await app.inject({ method: "POST", url: "/channels" });
   assert.equal(path.statusCode, 201);
   assert.match(path.json().url, /^\/c\/[0-9a-f-]+$/);
@@ -51,7 +51,7 @@ test("path creation stays path-based and isolated creation is configuration-boun
   await app.close();
 
   delete process.env.AP_CHANNEL_BASE_DOMAIN;
-  const unconfigured = buildTestApp(new ChannelBroker());
+  const unconfigured = buildTestApp(testBroker());
   const rejected = await unconfigured.inject({ method: "POST", url: "/channels", payload: { exposure: { mode: "isolated-host" } } });
   assert.equal(rejected.statusCode, 503);
   assert.deepEqual(rejected.json(), { error: "isolated_host_not_configured" });
@@ -63,7 +63,7 @@ test("path creation stays path-based and isolated creation is configuration-boun
 test("isolated hosts own every path while legacy shared paths fail closed", async () => {
   const previous = process.env.AP_CHANNEL_BASE_DOMAIN;
   process.env.AP_CHANNEL_BASE_DOMAIN = baseDomain;
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const app = buildTestApp(broker);
   const created = await app.inject({ method: "POST", url: "/channels", payload: { exposure: { mode: "isolated-host" } } });
   const { channel, secret, url } = created.json();

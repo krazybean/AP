@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 const validId = "c0a80101-0000-4000-8000-000000000001";
 
 test("public channels preserve the existing proxy contract", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const created = await broker.createChannel();
   const app = buildTestApp(broker);
   const request = app.inject({ method: "GET", url: `/c/${created.id}/projects`, headers: { authorization: "Bearer app" } });
-  const pending = await broker.next(created.id, created.secret, 0);
+  const pending = await broker.next(created.id, created.secret, 2_000);
   assert.ok(pending);
   await broker.respond(created.id, created.secret, pending.id, { statusCode: 200, body: "ok" });
   assert.equal((await request).statusCode, 200);
@@ -19,7 +19,7 @@ test("public channels preserve the existing proxy contract", async () => {
 });
 
 test("protected creation returns a one-time client token and rejects unauthenticated traffic", async () => {
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   const created = await app.inject({ method: "POST", url: "/channels", payload: { access: { mode: "bearer" } } });
   assert.equal(created.statusCode, 201);
   const body = created.json();
@@ -37,7 +37,7 @@ test("protected creation returns a one-time client token and rejects unauthentic
 
 test("AP access token is separate from downstream Authorization and is not forwarded", async () => {
   let headers: Record<string, string | string[] | undefined> | undefined;
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const originalDispatch = broker.dispatch.bind(broker);
   const created = await broker.createChannel();
   const app = buildTestApp({
@@ -62,7 +62,7 @@ test("AP access token is separate from downstream Authorization and is not forwa
 });
 
 test("credential lifecycle supports rotation, revocation, expiry, and a bounded limit", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const created = await broker.createChannel("test", 10, { mode: "bearer" });
   const second = await broker.createClientCredential(created.id, created.secret);
   assert.ok(await broker.authenticateClient(created.id, created.clientCredential!.token));
@@ -83,7 +83,7 @@ test("credential lifecycle supports rotation, revocation, expiry, and a bounded 
 });
 
 test("credential control endpoints require the dedicated downstream secret header", async () => {
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   const created = (await app.inject({ method: "POST", url: "/channels", payload: { access: { mode: "bearer" } } })).json();
   assert.equal((await app.inject({ method: "POST", url: `/channels/${created.channel}/access-tokens`, headers: { authorization: `Bearer ${created.secret}` }, payload: {} })).statusCode, 401);
   const added = await app.inject({ method: "POST", url: `/channels/${created.channel}/access-tokens`, headers: { "x-ap-downstream-secret": created.secret }, payload: {} });

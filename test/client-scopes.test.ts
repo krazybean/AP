@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { scopeAllows, validateScopes } from "../src/client-scopes.js";
-import { ChannelBroker } from "../src/channel-broker.js";
+import { testBroker } from "./test-broker.js";
 import { buildTestApp } from "./build-test-app.js";
 
 async function protectedChannel(app: ReturnType<typeof buildTestApp>, scopes?: unknown) {
@@ -32,7 +32,7 @@ test("scope grammar and method matching are deterministic", () => {
 });
 
 test("unrestricted credentials preserve Wave 2A behavior", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const app = buildTestApp(broker);
   const created = await protectedChannel(app);
   assert.equal((await roundTrip(app, created.channel, created.secret, created.access.token, "POST", `/c/${created.channel}/generate`)).statusCode, 200);
@@ -40,7 +40,7 @@ test("unrestricted credentials preserve Wave 2A behavior", async () => {
 });
 
 test("exact and subtree scopes enforce method and application path", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const app = buildTestApp(broker);
   const exact = await protectedChannel(app, [{ methods: ["GET"], path: "/projects" }]);
   assert.equal((await roundTrip(app, exact.channel, exact.secret, exact.access.token, "GET", `/c/${exact.channel}/projects`)).statusCode, 200);
@@ -62,7 +62,7 @@ test("exact and subtree scopes enforce method and application path", async () =>
 });
 
 test("multiple credentials are isolated and denied requests consume no capacity", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const app = buildTestApp(broker);
   const created = await protectedChannel(app, [{ methods: ["GET"], path: "/read/*" }]);
   const second = await app.inject({ method: "POST", url: `/channels/${created.channel}/access-tokens`, headers: { "x-ap-downstream-secret": created.secret }, payload: { scopes: [{ methods: ["POST"], path: "/write/*" }] } });
@@ -75,7 +75,7 @@ test("multiple credentials are isolated and denied requests consume no capacity"
 });
 
 test("empty and malformed scopes are rejected before channel creation", async () => {
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   for (const scopes of [
     [],
     [{ methods: ["GET"], path: "projects" }],
@@ -88,7 +88,7 @@ test("empty and malformed scopes are rejected before channel creation", async ()
 });
 
 test("ambiguous encoded and dot-segment paths fail closed", async () => {
-  const app = buildTestApp(new ChannelBroker());
+  const app = buildTestApp(testBroker());
   const created = await protectedChannel(app, [{ methods: ["GET"], path: "/projects/*" }]);
   for (const path of ["/projects/", "/projects//1", "/projects/../admin", "/projects/%2e%2e/admin", "/projects/%2fadmin", "/projects/%5cadmin", "/projects/%", "/projects/％"] ) {
     const response = await app.inject({ method: "GET", url: `/c/${created.channel}${path}`, headers: { "x-ap-access-token": created.access.token } });

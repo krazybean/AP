@@ -38,3 +38,37 @@ jobs:
           name: ap-sbom
           path: ap.cdx.json
           if-no-files-found: error
+
+  redis:
+    # Runs the whole suite, HTTP tests included, against real Redis through the
+    # Upstash REST API, the same client path production uses.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85 # redis:7
+      srh:
+        image: hiett/serverless-redis-http@sha256:5b0bb9239fce53abf87b2018a7a0deb9ec7bd900c5360738fe5fbeeb426f9150
+        env:
+          SRH_MODE: env
+          SRH_TOKEN: ci_token
+          SRH_CONNECTION_STRING: redis://redis:6379
+        ports:
+          - 8079:80
+    env:
+      UPSTASH_REDIS_REST_URL: http://localhost:8079
+      UPSTASH_REDIS_REST_TOKEN: ci_token
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Wait for the Redis REST proxy
+        run: |
+          for attempt in $(seq 1 30); do
+            curl -sf -X POST "$UPSTASH_REDIS_REST_URL" -H "Authorization: Bearer $UPSTASH_REDIS_REST_TOKEN" -H "content-type: application/json" -d '["PING"]' && exit 0
+            sleep 2
+          done
+          exit 1
+      - run: npm run test:redis

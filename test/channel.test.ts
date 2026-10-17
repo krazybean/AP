@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { ChannelBroker } from "../src/channel-broker.js";
 import { buildTestApp } from "./build-test-app.js";
+import { testBroker } from "./test-broker.js";
 import { sourceRateLimitKey } from "../src/routes.js";
 
 test("channel proxies a request to a polling downstream", async () => {
@@ -119,7 +120,7 @@ test("JSON object response bodies are forwarded as JSON", async () => {
 });
 
 test("empty downstream polling returns 204 and incorrect secret returns 401", async () => {
-  const broker = new ChannelBroker();
+  const broker = testBroker();
   const { id: channel, secret } = await broker.createChannel();
   const app = buildTestApp(broker);
 

@@ -19,3 +19,14 @@ test("memory broker bounds queued and delivered work and releases capacity", asy
   await assert.rejects(second, /DOWNSTREAM_TIMEOUT/);
   assert.equal(broker.metrics().queuedRequests + broker.metrics().inFlightRequests, 0);
 });
+
+test("memory broker keeps only a digest of the channel secret", async () => {
+  const broker = new ChannelBroker();
+  const { id, secret } = await broker.createChannel();
+  const channel = (broker as unknown as { channels: Map<string, Record<string, unknown>> }).channels.get(id)!;
+
+  assert.equal("secret" in channel, false);
+  assert.ok(Buffer.isBuffer(channel.secretDigest));
+  assert.equal(await broker.next(id, secret, 0), null);
+  await assert.rejects(broker.next(id, `${secret}x`, 0), /CHANNEL_UNAUTHORIZED/);
+});
