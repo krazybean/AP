@@ -18,7 +18,7 @@ If the AP you use requires accounts, send your AP key as `X-AP-Key` on this call
 The downstream sends:
 
 ```http
-POST https://ap.krazybean.com/channels
+POST https://apchannels.dev/channels
 ```
 
 AP returns HTTP `201`:
@@ -66,7 +66,7 @@ Retain `channel` and `secret` for the uplink loop. The absolute public URL is th
 
 ### Browser-origin isolation
 
-Omitting `exposure` uses the deployment's default, which is the shared path channel unless the operator sets `AP_DEFAULT_EXPOSURE=isolated-host`; always use the `url` AP returns. For browser-origin separation, configure AP's trusted `AP_CHANNEL_BASE_DOMAIN` (for example `channels.ap.krazybean.com`) and request `{"exposure":{"mode":"isolated-host"}}`. AP returns an absolute URL such as `https://<channel>.channels.ap.krazybean.com/`; each isolated channel hostname is a distinct browser origin. AP never derives this URL from `Host`, `X-Forwarded-Host`, or `Forwarded`; an unset or malformed base domain rejects isolated creation with `503`.
+Omitting `exposure` uses the deployment's default, which is the shared path channel unless the operator sets `AP_DEFAULT_EXPOSURE=isolated-host`; always use the `url` AP returns. For browser-origin separation, configure AP's trusted `AP_CHANNEL_BASE_DOMAIN` (for example `apchannels.dev`) and request `{"exposure":{"mode":"isolated-host"}}`. AP returns an absolute URL such as `https://<channel>.apchannels.dev/`; each isolated channel hostname is a distinct browser origin. AP never derives this URL from `Host`, `X-Forwarded-Host`, or `Forwarded`; an unset or malformed base domain rejects isolated creation with `503`.
 
 On an isolated hostname, every path—including `/health`, `/metrics`, and `/channels`—is downstream application traffic. The shared `/c/{channel}` form returns `404` for isolated channels. Configure `*.channels.<AP-domain>` on the AP deployment for production; DNS and wildcard certificate provisioning are deployment responsibilities.
 
@@ -150,7 +150,7 @@ A successful handoff returns HTTP `202`.
 Give the AI client:
 
 ```text
-https://ap.krazybean.com/c/{channel}
+https://apchannels.dev/c/{channel}
 ```
 
 The client starts there. It should be able to read the APP landing page, discover capabilities, and make ordinary HTTP requests beneath the same channel URL.

@@ -105,3 +105,23 @@ test("isolated hosts own every path while legacy shared paths fail closed", asyn
   if (previous === undefined) delete process.env.AP_CHANNEL_BASE_DOMAIN;
   else process.env.AP_CHANNEL_BASE_DOMAIN = previous;
 });
+
+test("the bare base domain serves AP itself, not channel traffic", async () => {
+  const previous = process.env.AP_CHANNEL_BASE_DOMAIN;
+  process.env.AP_CHANNEL_BASE_DOMAIN = baseDomain;
+  const app = buildTestApp(testBroker());
+  try {
+    const health = await app.inject({ method: "GET", url: "/health", headers: { host: baseDomain } });
+    assert.equal(health.statusCode, 200);
+    assert.equal(health.json().service, "ap");
+    const created = await app.inject({ method: "POST", url: "/channels", headers: { host: `${baseDomain.toUpperCase()}:443` }, payload: { exposure: { mode: "isolated-host" } } });
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().url, `https://${created.json().channel}.${baseDomain}/`);
+    const notAChannel = await app.inject({ method: "GET", url: "/health", headers: { host: `www.${baseDomain}` } });
+    assert.equal(notAChannel.statusCode, 404);
+  } finally {
+    await app.close();
+    if (previous === undefined) delete process.env.AP_CHANNEL_BASE_DOMAIN;
+    else process.env.AP_CHANNEL_BASE_DOMAIN = previous;
+  }
+});

@@ -1,6 +1,6 @@
 // The smallest AP app: run it, and anyone can call it from the internet.
 // Run: node examples/hello-app.mjs
-const AP = process.env.AP_URL ?? "https://ap.krazybean.com";
+const AP = process.env.AP_URL ?? "https://apchannels.dev";
 // Your AP key from `npm run login`, if you have one.
 const key = process.env.AP_KEY ? { "x-ap-key": process.env.AP_KEY } : {};
 

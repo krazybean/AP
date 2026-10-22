@@ -2,7 +2,7 @@
 // Run: npm run login        (AP_URL picks another AP; the default is the hosted one)
 import { hostname } from "node:os";
 
-const AP = process.env.AP_URL ?? "https://ap.krazybean.com";
+const AP = process.env.AP_URL ?? "https://apchannels.dev";
 const post = (path, body) => fetch(`${AP}${path}`, {
   method: "POST",
   ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
