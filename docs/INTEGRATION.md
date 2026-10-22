@@ -136,6 +136,11 @@ Envelope:
 
 `statusCode` and `headers` are optional. AP defaults the public status to `200` when no status is supplied.
 
+- `statusCode`, when present, must be an integer from `200` to `599`. Informational `1xx` codes cannot be a final response.
+- Every header name and value must be a valid HTTP header (no spaces in names, no CR, LF or NUL in values). Otherwise AP answers `400 invalid_response`, and the request stays pending so you can send a corrected response.
+- AP sends an object `body` as JSON. It sets `Content-Type: application/json` unless you supply a content type.
+- AP drops hop-by-hop, forwarding, `Set-Cookie`, `Content-Encoding` and `Content-Length` headers, because it re-serializes the body itself.
+
 A successful handoff returns HTTP `202`.
 
 ## 5. Share the public URL

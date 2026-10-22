@@ -35,6 +35,7 @@ interface Service extends ServiceRecord {
 
 const CHANNEL_CREATION_WINDOW_MS = 60 * 60 * 1_000;
 const CHANNEL_TTL_MS = 15 * 60 * 1_000;
+const SWEEP_INTERVAL_MS = 60 * 1_000;
 
 export class ChannelBroker implements Broker {
   readonly type = "memory" as const;
@@ -43,6 +44,7 @@ export class ChannelBroker implements Broker {
   private readonly serviceCreationLimits = new Map<string, CreationLimit>();
   private readonly services = new Map<string, Service>();
   private readonly serviceByChannel = new Map<string, string>();
+  private lastSweepAt = Date.now();
 
   constructor(private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY) {}
 
@@ -61,6 +63,7 @@ export class ChannelBroker implements Broker {
   }
 
   async createChannel(rateLimitKey = "default", limit = 10, access: AccessConfig = { mode: "public" }, exposure: ExposureConfig = { mode: "path" }) {
+    this.sweep();
     const now = Date.now();
     const current = this.creationLimits.get(rateLimitKey);
     const window = current && current.expiresAt > now
@@ -89,6 +92,7 @@ export class ChannelBroker implements Broker {
 
   async createService(name: string, rateLimitKey = "default", limit = 10) {
     validateServiceName(name);
+    this.sweep();
     const now = Date.now();
     const current = this.serviceCreationLimits.get(rateLimitKey);
     const window = current && current.expiresAt > now ? current : { count: 0, expiresAt: now + 60 * 60 * 1_000 };
@@ -234,15 +238,16 @@ export class ChannelBroker implements Broker {
     }
 
     return new Promise((resolve) => {
-      const waiter = (request: PendingRequest | null) => {
-        resolve(request);
-      };
-      channel.waiters.push(waiter);
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         const index = channel.waiters.indexOf(waiter);
         if (index >= 0) channel.waiters.splice(index, 1);
         resolve(null);
       }, waitMs);
+      const waiter = (request: PendingRequest | null) => {
+        clearTimeout(timer);
+        resolve(request);
+      };
+      channel.waiters.push(waiter);
     });
   }
 
@@ -259,6 +264,18 @@ export class ChannelBroker implements Broker {
     clearTimeout(exchange.timeout);
     exchange.resolve(response);
     this.deliver(channel);
+  }
+
+  // Expired entries are otherwise only removed when looked up again, so a busy
+  // process would keep every source address and abandoned channel forever.
+  private sweep() {
+    const now = Date.now();
+    if (now - this.lastSweepAt < SWEEP_INTERVAL_MS) return;
+    this.lastSweepAt = now;
+    for (const limits of [this.creationLimits, this.serviceCreationLimits]) {
+      for (const [key, window] of limits) if (window.expiresAt <= now) limits.delete(key);
+    }
+    for (const id of this.channels.keys()) this.getChannel(id);
   }
 
   private getChannel(id: string) {
