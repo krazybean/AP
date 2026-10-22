@@ -233,7 +233,7 @@ forever:
     }
 ```
 
-The executable reference is [../scripts/mock-downstream.ts](../scripts/mock-downstream.ts).
+The executable reference is [../scripts/mock-downstream.ts](../scripts/mock-downstream.ts). For the shortest working app, with a step-by-step walkthrough, see [EXAMPLE.md](EXAMPLE.md) and [../examples/hello-app.mjs](../examples/hello-app.mjs).
 
 ## Error behavior currently implemented
 
