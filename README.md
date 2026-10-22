@@ -154,6 +154,8 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 
 Request and response envelopes, protected channels and isolated hosts are documented in [docs/INTEGRATION.md](docs/INTEGRATION.md). Named services are in [docs/SERVICES.md](docs/SERVICES.md).
 
+To give each channel its own hostname on a wildcard domain, follow [docs/SETUP.md](docs/SETUP.md).
+
 ---
 
 ## Current status
