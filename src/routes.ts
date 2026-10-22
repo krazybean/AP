@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
+import { validateHeaderName, validateHeaderValue } from "node:http";
 import { isIP } from "node:net";
 
 import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
@@ -36,6 +37,18 @@ const HOP_BY_HOP = new Set([
 ]);
 const FORWARDED = new Set(["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]);
 const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret", "x-ap-service-secret"]);
+// AP re-serializes response bodies, so the downstream's encoding and length headers never describe what AP sends.
+const OUTBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie", "x-ap-request-id", "content-encoding", "content-length"]);
+
+function validHeader(name: string, value: string) {
+  try {
+    validateHeaderName(name);
+    validateHeaderValue(name, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function filteredHeaders(headers: Record<string, string | string[] | undefined>, deny: Set<string>) {
   const blocked = new Set(deny);
@@ -64,13 +77,13 @@ function parseDownstreamResponse(body: unknown): DownstreamResponse | null {
   const candidate = body as Record<string, unknown>;
   const statusCode = candidate.statusCode;
   if (statusCode !== undefined &&
-      (typeof statusCode !== "number" || !Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599)) {
+      (typeof statusCode !== "number" || !Number.isInteger(statusCode) || statusCode < 200 || statusCode > 599)) {
     return null;
   }
 
   if (candidate.headers !== undefined &&
       (typeof candidate.headers !== "object" || candidate.headers === null || Array.isArray(candidate.headers) ||
-        Object.values(candidate.headers).some((value) => typeof value !== "string"))) {
+        Object.entries(candidate.headers).some(([name, value]) => typeof value !== "string" || !validHeader(name, value)))) {
     return null;
   }
 
@@ -217,7 +230,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       return reply.code(400).send({ error: "invalid_service_name" });
     }
     try {
-      const created = await broker.createService(name as string, request.ip, SERVICE_CREATION_LIMIT);
+      const created = await broker.createService(name as string, sourceRateLimitKey(request.ip), SERVICE_CREATION_LIMIT);
       securityMetrics.recordServiceCreated();
       audit(request, { event: "service.created", serviceId: created.serviceId, name: created.name });
       return reply.code(201).send(created);
@@ -290,7 +303,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       if (message === "SERVICE_NOT_FOUND" || message === "CHANNEL_NOT_FOUND") return reply.code(404).send({ error: message === "SERVICE_NOT_FOUND" ? "service_not_found" : "channel_not_found" });
       if (message === "SERVICE_UNAUTHORIZED" || message === "CHANNEL_UNAUTHORIZED") {
         securityMetrics.recordServiceAuthFailure();
-        audit(request, { event: "service.auth_rejected", reason: serviceSecret ? "invalid" : "missing" });
+        const rejected = message === "SERVICE_UNAUTHORIZED" ? serviceSecret : channelSecret;
+        audit(request, { event: "service.auth_rejected", reason: rejected ? "invalid" : "missing" });
         return reply.code(401).send({ error: message === "SERVICE_UNAUTHORIZED" ? "service_unauthorized" : "channel_unauthorized" });
       }
       if (message === "SERVICE_CHANNEL_CONFLICT") return reply.code(409).send({ error: "service_channel_conflict" });
@@ -492,7 +506,13 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
     if (!classification) return reply.code(404).send({ error: "not_found" });
     const channel = classification;
-    const exposure = await broker.channelExposure(channel);
+    let exposure;
+    try {
+      exposure = await broker.channelExposure(channel);
+    } catch (error) {
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
     if (exposure !== "isolated-host") {
       securityMetrics.recordInvalidHost("invalid_channel");
       audit(request, { event: "origin.invalid_host", reason: "invalid_channel" });
@@ -530,7 +550,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       const accessToken = clientAccessToken(request.headers);
       try {
         const authenticated = await broker.authenticateClient(channel, accessToken);
-        if (accessToken) metrics.clientAuthSuccesses += 1;
+        if (authenticated) metrics.clientAuthSuccesses += 1;
         if (authenticated?.scopes) {
           let applicationPath: string;
           try {
@@ -571,17 +591,17 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         body: request.body,
       });
 
-      const safeHeaders = filteredHeaders(downstream.headers ?? {}, new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie", "x-ap-request-id"]));
+      const safeHeaders = filteredHeaders(downstream.headers ?? {}, OUTBOUND_DENY);
       for (const [name, value] of Object.entries(safeHeaders)) {
         reply.header(name, value as string);
       }
+      const jsonBody = downstream.body !== null && typeof downstream.body === "object";
+      if (jsonBody && !Object.keys(safeHeaders).some((name) => name.toLowerCase() === "content-type")) {
+        reply.header("content-type", "application/json; charset=utf-8");
+      }
 
       metrics.proxyResponses += 1;
-      return reply.code(downstream.statusCode ?? 200).send(
-        downstream.body !== null && typeof downstream.body === "object"
-          ? JSON.stringify(downstream.body)
-          : downstream.body,
-      );
+      return reply.code(downstream.statusCode ?? 200).send(jsonBody ? JSON.stringify(downstream.body) : downstream.body);
     } catch (error) {
       const message = errorMessage(error);
       if (error instanceof BrokerCapacityError) {
