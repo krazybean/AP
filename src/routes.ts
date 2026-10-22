@@ -39,6 +39,10 @@ const FORWARDED = new Set(["forwarded", "x-forwarded-for", "x-forwarded-host", "
 const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret", "x-ap-service-secret"]);
 // AP re-serializes response bodies, so the downstream's encoding and length headers never describe what AP sends.
 const OUTBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie", "x-ap-request-id", "content-encoding", "content-length"]);
+// Path channels all share AP's origin, so their pages run in an opaque-origin sandbox:
+// scripts still run, but cannot read other channels, AP storage or register service workers.
+const SHARED_ORIGIN_DENY = new Set([...OUTBOUND_DENY, "service-worker-allowed"]);
+const SHARED_ORIGIN_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-downloads";
 
 function validHeader(name: string, value: string) {
   try {
@@ -591,9 +595,21 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
         body: request.body,
       });
 
-      const safeHeaders = filteredHeaders(downstream.headers ?? {}, OUTBOUND_DENY);
+      const safeHeaders = filteredHeaders(downstream.headers ?? {}, isolatedHost ? OUTBOUND_DENY : SHARED_ORIGIN_DENY);
+      const policies: string[] = [];
       for (const [name, value] of Object.entries(safeHeaders)) {
+        const lower = name.toLowerCase();
+        if (!isolatedHost && lower === "content-security-policy") {
+          policies.push(...(Array.isArray(value) ? value : [value]));
+          continue;
+        }
+        if (!isolatedHost && lower === "x-content-type-options") continue;
         reply.header(name, value as string);
+      }
+      if (!isolatedHost) {
+        // Browsers enforce every CSP header, so the app's own policy still applies alongside the sandbox.
+        reply.header("content-security-policy", (policies.length ? [...policies, SHARED_ORIGIN_SANDBOX] : SHARED_ORIGIN_SANDBOX) as string);
+        reply.header("x-content-type-options", "nosniff");
       }
       const jsonBody = downstream.body !== null && typeof downstream.body === "object";
       if (jsonBody && !Object.keys(safeHeaders).some((name) => name.toLowerCase() === "content-type")) {
