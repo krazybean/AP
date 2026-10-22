@@ -64,7 +64,7 @@ Retain `channel` and `secret` for the uplink loop. The absolute public URL is th
 
 ### Browser-origin isolation
 
-Omitting `exposure` preserves the shared path channel. For browser-origin separation, configure AP's trusted `AP_CHANNEL_BASE_DOMAIN` (for example `channels.ap.krazybean.com`) and request `{"exposure":{"mode":"isolated-host"}}`. AP returns an absolute URL such as `https://<channel>.channels.ap.krazybean.com/`; each isolated channel hostname is a distinct browser origin. AP never derives this URL from `Host`, `X-Forwarded-Host`, or `Forwarded`; an unset or malformed base domain rejects isolated creation with `503`.
+Omitting `exposure` uses the deployment's default, which is the shared path channel unless the operator sets `AP_DEFAULT_EXPOSURE=isolated-host`; always use the `url` AP returns. For browser-origin separation, configure AP's trusted `AP_CHANNEL_BASE_DOMAIN` (for example `channels.ap.krazybean.com`) and request `{"exposure":{"mode":"isolated-host"}}`. AP returns an absolute URL such as `https://<channel>.channels.ap.krazybean.com/`; each isolated channel hostname is a distinct browser origin. AP never derives this URL from `Host`, `X-Forwarded-Host`, or `Forwarded`; an unset or malformed base domain rejects isolated creation with `503`.
 
 On an isolated hostname, every path—including `/health`, `/metrics`, and `/channels`—is downstream application traffic. The shared `/c/{channel}` form returns `404` for isolated channels. Configure `*.channels.<AP-domain>` on the AP deployment for production; DNS and wildcard certificate provisioning are deployment responsibilities.
 

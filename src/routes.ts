@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 
 import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
+import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
@@ -116,10 +117,10 @@ function parseAccess(body: unknown): AccessConfig | null {
 }
 
 function parseExposure(body: unknown): ExposureConfig | null {
-  if (body === undefined || body === null) return { mode: "path" };
+  if (body === undefined || body === null) return { mode: defaultExposureMode() };
   if (typeof body !== "object" || Array.isArray(body)) return null;
   const exposure = (body as Record<string, unknown>).exposure;
-  if (exposure === undefined) return { mode: "path" };
+  if (exposure === undefined) return { mode: defaultExposureMode() };
   if (!exposure || typeof exposure !== "object" || Array.isArray(exposure)) return null;
   const mode = (exposure as Record<string, unknown>).mode;
   return mode === "path" || mode === "isolated-host" ? { mode } : null;
@@ -130,6 +131,7 @@ export interface RouteOptions {
 }
 
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker(), options: RouteOptions = {}) {
+  defaultExposureMode();
   const securityMetrics = new SecurityMetrics();
   const emitAudit = createAuditEmitter(options.auditSink ?? loggerAuditSink(app.log), () => securityMetrics.recordAuditFailure());
   const audit = (request: { id: string }, event: { event: SecurityAuditEvent["event"]; [key: string]: unknown }) => {

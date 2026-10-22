@@ -123,6 +123,22 @@ HTTP/2 200
 
 A `504` with `downstream_timeout` means the request reached the channel but nothing answered it in time; usually Terminal 1 wasn't waiting yet.
 
+The reference app does the same thing in one command, and prints the channel's address:
+
+```bash
+AP_URL=https://ap.krazybean.com AP_EXPOSURE=isolated-host npm run mock:downstream
+```
+
+## 7. Optional: make isolated hosts the default
+
+Channels that don't ask for an exposure mode are path channels. To give them their own hostname instead, add this environment variable and redeploy:
+
+| Key | Value | Environment |
+| --- | --- | --- |
+| `AP_DEFAULT_EXPOSURE` | `isolated-host` | Production |
+
+Apps can still ask for a path channel with `{"exposure":{"mode":"path"}}`. Before turning this on, check that the apps you run use the `url` AP returns rather than building `/c/<channel>` themselves, since isolated channels return `404` on that form. `AP_DEFAULT_EXPOSURE` accepts only `path` (the default) or `isolated-host`; any other value stops AP at startup.
+
 ## Behavior on isolated hostnames
 
 - Every path on `<channel>.<base-domain>`, including `/health`, `/metrics` and `/channels/*`, is application traffic for that channel.
