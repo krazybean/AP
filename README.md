@@ -33,6 +33,8 @@ AI client / agent / service
 
 ## Try it in a minute
 
+New to AP? [docs/EXAMPLE.md](docs/EXAMPLE.md) walks you through putting a tiny app online in five steps.
+
 Requires Node.js 24.x.
 
 ```bash
