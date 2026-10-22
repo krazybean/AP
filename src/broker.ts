@@ -60,6 +60,7 @@ export class ChannelRateLimitError extends Error {
 
 export interface Broker {
   readonly type: "memory" | "redis";
+  readonly accounts: import("./accounts.js").AccountStore;
   health(): Promise<void>;
   metrics(): BrokerMetrics;
   createChannel(rateLimitKey?: string, limit?: number, access?: AccessConfig, exposure?: ExposureConfig): Promise<CreatedChannel>;

@@ -14,6 +14,7 @@ import {
   type PendingRequest,
   type ExposureConfig,
 } from "./broker.js";
+import { RedisAccountStore } from "./redis-accounts.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { validateScopes, type ClientScope } from "./client-scopes.js";
 import { SERVICE_INSTANCE_LIMIT, createService, validateServiceName, type ServiceSnapshot } from "./services.js";
@@ -131,7 +132,11 @@ export class RedisBroker implements Broker {
     private readonly redis = Redis.fromEnv({ automaticDeserialization: false }),
     private readonly capacity: BrokerCapacity = DEFAULT_BROKER_CAPACITY,
     private readonly keyPrefix = "ap:",
-  ) {}
+  ) {
+    this.accounts = new RedisAccountStore(this.redis, this.keyPrefix, (operation) => this.command(operation));
+  }
+
+  readonly accounts: RedisAccountStore;
 
   async health() {
     await this.command(() => this.redis.ping());

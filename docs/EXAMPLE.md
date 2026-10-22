@@ -86,6 +86,7 @@ If you leave the app idle for 15 minutes, AP closes the address on its own.
 | `downstream_timeout` | Your app wasn't running | Start step 2 again |
 | `channel_not_found` | The address is old | Use the new address from step 2 |
 | `Could not get an address: channel_rate_limited` | You made more than 10 addresses this hour | Wait an hour, then start step 2 again |
+| `Could not get an address: account_required` | This AP needs a key | Get one with `npm run login` ([ACCOUNTS.md](ACCOUNTS.md)), run `export AP_KEY='apk_...'`, then start step 2 again |
 
 ## What next
 

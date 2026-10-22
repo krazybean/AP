@@ -13,6 +13,8 @@ The downstream initiates every AP infrastructure connection. The client never cr
 
 ## 1. Create a channel
 
+If the AP you use requires accounts, send your AP key as `X-AP-Key` on this call and on every polling, response and access-token call below. [ACCOUNTS.md](ACCOUNTS.md) shows how to get one.
+
 The downstream sends:
 
 ```http
@@ -242,6 +244,9 @@ The executable reference is [../scripts/mock-downstream.ts](../scripts/mock-down
 - Missing or invalid downstream secret while polling/responding: HTTP `401`
 - Malformed downstream response envelope: HTTP `400`
 - Channel creation over the source limit: HTTP `429`
+- AP key missing while accounts are required: `401 {"error":"account_required"}`; unknown or revoked key: `401 {"error":"account_key_invalid"}`
+- Channel made by another account's key: `403 {"error":"channel_not_owned"}`
+- Account already at its live-channel limit: `429 {"error":"account_channel_limit"}`
 - Downstream does not answer a dispatched public request in time: `504 {"error":"downstream_timeout"}`
 - Timed-out requests cannot be completed later; their response is rejected as `request_not_found`.
 - Poll completes without a request: HTTP `204`
@@ -254,7 +259,7 @@ Keep the AP adapter thin. Application capabilities belong behind the application
 
 Keep channel identity separate from the polling transport. The current implementation polls, but applications should not design their domain model around polling being permanent.
 
-Do not expose secrets in the APP landing page or capability responses. Channel creation remains public in the prototype; public channels remain reachable through the channel URL, while protected channels additionally require the AP client token. The downstream secret protects polling, responses, and credential control.
+Do not expose secrets in the APP landing page or capability responses. Channel creation is public unless the operator requires accounts; public channels remain reachable through the channel URL, while protected channels additionally require the AP client token. The downstream secret protects polling, responses, and credential control.
 
 ## Current lifecycle limitation
 

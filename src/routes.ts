@@ -3,8 +3,10 @@ import { timingSafeEqual } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { isIP } from "node:net";
 
+import { registerAccountRoutes } from "./account-routes.js";
 import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
+import type { GitHubDeviceClient } from "./github.js";
 import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
@@ -29,6 +31,8 @@ const SERVICE_CREATION_LIMIT = Number.isInteger(Number(process.env.SERVICES_PER_
   Number(process.env.SERVICES_PER_IP_PER_HOUR) > 0
   ? Number(process.env.SERVICES_PER_IP_PER_HOUR)
   : 10;
+// Signed-in callers are bounded by their live-channel limit; this only stops runaway create loops.
+const ACCOUNT_CHANNELS_PER_HOUR = 100;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HEALTH_CACHE_MS = 1_000;
@@ -37,7 +41,7 @@ const HOP_BY_HOP = new Set([
   "trailer", "transfer-encoding", "upgrade",
 ]);
 const FORWARDED = new Set(["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"]);
-const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret", "x-ap-service-secret"]);
+const INBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "host", "content-length", "x-ap-access-token", "x-ap-downstream-secret", "x-ap-service-secret", "x-ap-key"]);
 // AP re-serializes response bodies, so the downstream's encoding and length headers never describe what AP sends.
 const OUTBOUND_DENY = new Set([...HOP_BY_HOP, ...FORWARDED, "set-cookie", "x-ap-request-id", "content-encoding", "content-length"]);
 // Path channels all share AP's origin, so their pages run in an opaque-origin sandbox:
@@ -128,6 +132,7 @@ function parseExposure(body: unknown): ExposureConfig | null {
 
 export interface RouteOptions {
   auditSink?: AuditSink;
+  github?: GitHubDeviceClient;
 }
 
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker(), options: RouteOptions = {}) {
@@ -155,6 +160,18 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     clientCredentialsCreated: 0,
     clientCredentialsRevoked: 0,
   };
+  const accounts = registerAccountRoutes(app, {
+    broker,
+    github: options.github,
+    audit,
+    securityMetrics,
+    brokerUnavailable,
+    sourceKey: sourceRateLimitKey,
+    adminAuthorized: (authorization) => {
+      const token = process.env.AP_ADMIN_TOKEN;
+      return Boolean(token) && tokenMatches(authorization, token!);
+    },
+  });
   let healthAt = 0;
   let healthOk: boolean | undefined;
   let healthCheck: Promise<boolean> | undefined;
@@ -236,7 +253,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       return reply.code(400).send({ error: "invalid_service_name" });
     }
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false) return;
       const created = await broker.createService(name as string, sourceRateLimitKey(request.ip), SERVICE_CREATION_LIMIT);
+      if (account) await broker.accounts.recordService(account.githubId, created.name);
       securityMetrics.recordServiceCreated();
       audit(request, { event: "service.created", serviceId: created.serviceId, name: created.name });
       return reply.code(201).send(created);
@@ -293,6 +313,10 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     const serviceSecret = typeof request.headers["x-ap-service-secret"] === "string" ? request.headers["x-ap-service-secret"] : "";
     const channelSecret = typeof request.headers["x-ap-downstream-secret"] === "string" ? request.headers["x-ap-downstream-secret"] : "";
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false) return;
+      if (!(await accounts.serviceAllowed(request, reply, account, request.params.name))) return;
+      if (UUID.test(request.params.channel) && !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
       const serviceId = unbind
         ? await broker.unbindServiceInstance(request.params.name, serviceSecret, request.params.channel, channelSecret)
         : await broker.bindServiceInstance(request.params.name, serviceSecret, request.params.channel, channelSecret);
@@ -344,8 +368,14 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     }
 
     try {
-      const created = await broker.createChannel(sourceRateLimitKey(request.ip), CHANNEL_CREATION_LIMIT, access, exposure);
+      const account = await accounts.caller(request, reply);
+      if (account === false) return;
+      if (!(await accounts.channelSlotAvailable(request, reply, account))) return;
+      const created = account
+        ? await broker.createChannel(`account:${account.githubId}`, ACCOUNT_CHANNELS_PER_HOUR, access, exposure)
+        : await broker.createChannel(sourceRateLimitKey(request.ip), CHANNEL_CREATION_LIMIT, access, exposure);
       const { id: channel, secret, accessMode, clientCredential } = created;
+      if (account) await broker.accounts.recordChannel(account.githubId, channel);
       const exposureMode = created.exposureMode ?? exposure.mode;
       metrics.channelsCreated += 1;
       securityMetrics.recordChannelCreated(accessMode, exposureMode);
@@ -389,6 +419,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
       return reply.code(400).send({ error: "invalid_scopes" });
     }
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false || !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
       const credential = await broker.createClientCredential(request.params.channel, downstreamSecret(request.headers), expiresAt, scopes);
       metrics.clientCredentialsCreated += 1;
       securityMetrics.recordCredentialCreated();
@@ -415,6 +447,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   app.delete<{ Params: { channel: string; credentialId: string } }>("/channels/:channel/access-tokens/:credentialId", async (request, reply) => {
     if (!UUID.test(request.params.channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false || !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
       await broker.revokeClientCredential(request.params.channel, downstreamSecret(request.headers), request.params.credentialId);
       metrics.clientCredentialsRevoked += 1;
       securityMetrics.recordCredentialRevoked();
@@ -438,6 +472,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   app.get<{ Params: { channel: string } }>("/channels/:channel/next", async (request, reply) => {
     if (!UUID.test(request.params.channel)) return reply.code(404).send({ error: "channel_not_found" });
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false || !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
       const pending = await broker.next(request.params.channel, bearerToken(request.headers.authorization));
       if (!pending) return reply.code(204).send();
       return pending;
@@ -467,6 +503,8 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     if (!response) return reply.code(400).send({ error: "invalid_response" });
 
     try {
+      const account = await accounts.caller(request, reply);
+      if (account === false || !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
       await broker.respond(
         request.params.channel,
         bearerToken(request.headers.authorization),
