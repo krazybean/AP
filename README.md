@@ -137,12 +137,15 @@ AP's bet is that AI-facing services need a traffic layer that understands applic
 
 ## HTTP surface
 
-Downstream (private app) endpoints authenticate with the channel secret, sent as `Authorization: Bearer <secret>` for polling and responses, or as `X-AP-Downstream-Secret` for credential and service management. Clients of a protected channel send their token as `X-AP-Access-Token`; the ordinary `Authorization` header is passed through to the app.
+Downstream (private app) endpoints authenticate with the channel secret, sent as `Authorization: Bearer <secret>` for polling and responses, or as `X-AP-Downstream-Secret` for credential and service management. Clients of a protected channel send their token as `X-AP-Access-Token`; the ordinary `Authorization` header is passed through to the app. When the operator requires accounts, the downstream also sends its AP key as `X-AP-Key` on every call below except `/health`, `/metrics`, `/auth/*`, service discovery and client traffic; see [docs/ACCOUNTS.md](docs/ACCOUNTS.md).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | AP and broker health |
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
+| `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub and get an AP key |
+| `GET`, `DELETE` | `/keys`, `/keys/:keyId` | List or revoke your AP keys |
+| `GET`, `POST` | `/admin/accounts[/:githubId[/disable\|/enable]]` | Operator view of accounts and usage (requires `AP_ADMIN_TOKEN`) |
 | `POST` | `/channels` | Create a channel; optional `access` (bearer tokens, scopes) and `exposure` (isolated host) |
 | `GET` | `/channels/:channel/next` | Downstream waits for the next request |
 | `POST` | `/channels/:channel/responses/:requestId` | Downstream returns a response |
@@ -175,8 +178,8 @@ Current limits:
 
 - Channels expire after 15 minutes without activity; reconnecting apps create a new channel.
 - Bodies are JSON only and responses are not streamed.
-- Channel creation is anonymous, limited to 10 per source IP per hour. `REQUIRE_LICENSE=true` only requires a non-empty `X-APP-License` header; license values are not validated yet.
-- There is no user account or abuse-control model yet, and the APP schema and security model are not frozen.
+- Channel creation is anonymous by default, limited to 10 per source IP per hour. Operators can require a GitHub-backed AP key instead (`AP_REQUIRE_ACCOUNT=true`), which allows 10 live channels per account. `REQUIRE_LICENSE=true` only requires a non-empty `X-APP-License` header; license values are not validated yet.
+- The APP schema and security model are not frozen.
 
 Use the hosted service for development and experiments, and don't assume production guarantees that aren't documented. The security model is described in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) and [docs/SECURITY-BASELINE.md](docs/SECURITY-BASELINE.md); operations, including broker selection and Redis outages, in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 

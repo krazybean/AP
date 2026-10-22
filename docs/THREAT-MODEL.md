@@ -48,6 +48,7 @@ AP does not initiate connections into the private network. The downstream polls 
 | Metric cardinality/resource abuse | In-process counters with fixed reason/mode keys and no attacker-controlled labels or queue | External log volume management remains operational |
 | Redis/provider outage | Health checks, broker errors mapped to 503, no fallback in explicit Redis mode | Provider recovery and alerting are operational gates |
 | Service ownership and binding confusion | Opaque service IDs, one-time ownership secret, digest-only storage, two-secret binding, one-service-per-channel rule, atomic Redis membership, 16-instance cap | Service deletion, name reuse, and distributed edge throttling are deferred/operational |
+| Account key theft or abuse | GitHub device flow with no client secret or stored GitHub token; AP keys returned once and stored as digests; `X-AP-Key` redacted from logs and stripped before dispatch; per-IP sign-in limit; channel and service ownership checks; per-account live-channel cap; admin disable deletes keys; usage per day for review | Keys never expire by design, so a leaked key works until revoked; any GitHub account can sign in |
 | Service discovery leakage | Exact-name lookup only; no global list; response excludes secrets, digests, tokens, headers, bodies, and Redis metadata | Service names are not treated as confidential identifiers |
 
 ## Explicit non-goals

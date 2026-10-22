@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { BrokerCapacityError, ChannelRateLimitError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
+import { MemoryAccountStore } from "./accounts.js";
 import { validateScopes } from "./client-scopes.js";
 import { SERVICE_INSTANCE_LIMIT, createService, serviceSecretMatches, validateServiceName, type ServiceRecord, type ServiceSnapshot } from "./services.js";
 
@@ -39,6 +40,7 @@ const SWEEP_INTERVAL_MS = 60 * 1_000;
 
 export class ChannelBroker implements Broker {
   readonly type = "memory" as const;
+  readonly accounts = new MemoryAccountStore();
   private readonly channels = new Map<string, Channel>();
   private readonly creationLimits = new Map<string, CreationLimit>();
   private readonly serviceCreationLimits = new Map<string, CreationLimit>();

@@ -22,6 +22,10 @@ Broker health results are cached for at most one second, including failures, to 
 
 In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRICS_TOKEN` is set and the request includes `Authorization: Bearer <token>`. Keep this token secret; if unset, metrics are disabled.
 
+## Accounts
+
+GitHub sign-in and AP keys are off until `AP_GITHUB_CLIENT_ID` is set, and keys stay optional until `AP_REQUIRE_ACCOUNT=true`. Setup, the admin endpoints (`AP_ADMIN_TOKEN`) and the per-account live-channel limit (`AP_ACCOUNT_CHANNEL_LIMIT`, default 10) are in [ACCOUNTS.md](ACCOUNTS.md). Keys are stored as SHA-256 digests in Redis under `ap:apikey:*`; disabling an account deletes its keys. An invalid `AP_ACCOUNT_CHANNEL_LIMIT` stops startup.
+
 ## Security telemetry and auditability
 
 `/metrics` includes a `security` object with bounded dimensions only: authentication failure reasons (`missing`, `invalid`, `expired`, `revoked`), scope denial reason, capacity type, broker error type, invalid-host reason, lifecycle counters, path/isolated-host plus public/bearer channel-creation modes, timeout count, legacy isolated-path blocks, and audit-emission failures. It never uses channel ID, credential ID, hostname, request ID, path, IP address, user agent, or arbitrary application input as a metric label.
@@ -84,6 +88,8 @@ Approximate command budgets after the hardening pass are:
 | Response wait for 15 s | ~8 polling GETs |
 | Response wait for 30 s | ~11 polling GETs |
 | Downstream response submission | 3 |
+| Extra per call that sends `X-AP-Key` | 2 to 4 (key, account, channel owner; plus a last-used write at most once a minute) |
+| Extra per keyed channel creation | ~7 plus 1 per live channel the account holds |
 | Timeout cleanup | 1 atomic Lua call; 1 additional read only if a response wins the timeout race |
 
 The previous 100 ms polling path consumed roughly 253 commands for one idle 25 s `/next` request and roughly 50/150/300 response-key GETs for 5/15/30 second waits. Current capacity transitions are atomic Redis scripts; each counts as one command.

@@ -1,9 +1,11 @@
 // The smallest AP app: run it, and anyone can call it from the internet.
 // Run: node examples/hello-app.mjs
 const AP = process.env.AP_URL ?? "https://ap.krazybean.com";
+// Your AP key from `npm run login`, if you have one.
+const key = process.env.AP_KEY ? { "x-ap-key": process.env.AP_KEY } : {};
 
 // 1. Ask AP for a public address.
-const created = await fetch(`${AP}/channels`, { method: "POST" });
+const created = await fetch(`${AP}/channels`, { method: "POST", headers: key });
 const channel = await created.json();
 if (!created.ok) {
   console.error(`Could not get an address: ${channel.error}`);
@@ -14,7 +16,7 @@ console.log(`Your app is live at: ${address}`);
 console.log(`Try it: curl "${address}/hello?name=Sam"`);
 
 // 2. Wait for someone to call it, answer, and wait again.
-const secret = { authorization: `Bearer ${channel.secret}` };
+const secret = { ...key, authorization: `Bearer ${channel.secret}` };
 while (true) {
   const next = await fetch(`${AP}/channels/${channel.channel}/next`, { headers: secret });
   if (next.status === 204) continue; // nobody called yet; keep waiting

@@ -1,10 +1,13 @@
 const apBase = process.env.AP_URL ?? "http://localhost:4117";
+// AP_KEY (from `npm run login`) is sent on every call to AP; needed when AP requires accounts.
+const accountKey: Record<string, string> = process.env.AP_KEY ? { "x-ap-key": process.env.AP_KEY } : {};
 
 // AP_EXPOSURE=isolated-host gives the channel its own hostname (needs AP_CHANNEL_BASE_DOMAIN on the AP side).
 const exposure = process.env.AP_EXPOSURE;
 const created = await fetch(`${apBase}/channels`, {
   method: "POST",
-  ...(exposure ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ exposure: { mode: exposure } }) } : {}),
+  headers: { ...accountKey, ...(exposure ? { "content-type": "application/json" } : {}) },
+  ...(exposure ? { body: JSON.stringify({ exposure: { mode: exposure } }) } : {}),
 });
 if (!created.ok) throw new Error(`Failed to create channel: ${created.status} ${await created.text()}`);
 
@@ -21,7 +24,7 @@ console.log("Waiting for requests...");
 
 while (true) {
   const next = await fetch(`${apBase}/channels/${channel}/next`, {
-    headers: { authorization: `Bearer ${secret}` },
+    headers: { ...accountKey, authorization: `Bearer ${secret}` },
   });
   if (next.status === 204) continue;
   if (!next.ok) throw new Error(`Channel polling failed: ${next.status}`);
@@ -63,6 +66,7 @@ while (true) {
     {
       method: "POST",
       headers: {
+        ...accountKey,
         "content-type": "application/json",
         authorization: `Bearer ${secret}`,
       },

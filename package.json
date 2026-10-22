@@ -19,6 +19,7 @@
     "test": "node --import tsx --test test/*.test.ts",
     "test:redis": "AP_TEST_BROKER=redis AP_REDIS_INTEGRATION=1 node --import tsx --test test/*.test.ts",
     "mock:downstream": "tsx scripts/mock-downstream.ts",
+    "login": "node scripts/login.mjs",
     "security:scan": "node scripts/secret-scan.mjs",
     "security:load": "node --import tsx scripts/security-load.ts"
   },

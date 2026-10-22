@@ -2,6 +2,7 @@ export type AuthFailureReason = "missing" | "invalid" | "expired" | "revoked";
 export type InvalidHostReason = "malformed" | "invalid_channel" | "invalid_suffix";
 export type CapacityType = "queued" | "in_flight";
 export type ServiceAuthFailureReason = "missing" | "invalid";
+export type AccountRejectionReason = "missing" | "invalid" | "not_owned" | "limit" | "disabled";
 
 interface AuditBase {
   timestamp: string;
@@ -21,7 +22,10 @@ export type SecurityAuditEvent =
   | (AuditBase & { event: "broker.unavailable" | "broker.error"; reason: "unavailable" | "operation" })
   | (AuditBase & { event: "service.created"; serviceId: string; name: string })
   | (AuditBase & { event: "service.instance_bound" | "service.instance_unbound"; serviceId: string; channel: string })
-  | (AuditBase & { event: "service.auth_rejected"; reason: ServiceAuthFailureReason });
+  | (AuditBase & { event: "service.auth_rejected"; reason: ServiceAuthFailureReason })
+  | (AuditBase & { event: "account.key_created" | "account.key_revoked"; githubId: string; keyId: string })
+  | (AuditBase & { event: "account.disabled" | "account.enabled"; githubId: string })
+  | (AuditBase & { event: "account.rejected"; reason: AccountRejectionReason; githubId?: string });
 
 export interface AuditSink {
   emit(event: SecurityAuditEvent): void;
@@ -58,6 +62,11 @@ const eventKeys: Record<SecurityAuditEvent["event"], string[]> = {
   "service.instance_bound": ["event", "timestamp", "requestId", "serviceId", "channel"],
   "service.instance_unbound": ["event", "timestamp", "requestId", "serviceId", "channel"],
   "service.auth_rejected": ["event", "timestamp", "requestId", "reason"],
+  "account.key_created": ["event", "timestamp", "requestId", "githubId", "keyId"],
+  "account.key_revoked": ["event", "timestamp", "requestId", "githubId", "keyId"],
+  "account.disabled": ["event", "timestamp", "requestId", "githubId"],
+  "account.enabled": ["event", "timestamp", "requestId", "githubId"],
+  "account.rejected": ["event", "timestamp", "requestId", "reason", "githubId"],
 };
 
 const events = new Set(Object.keys(eventKeys));
@@ -91,6 +100,12 @@ export function isSecurityAuditEvent(value: unknown): value is SecurityAuditEven
   if ((record.event === "service.instance_bound" || record.event === "service.instance_unbound") &&
       (typeof record.serviceId !== "string" || typeof record.channel !== "string")) return false;
   if (record.event === "service.auth_rejected" && (record.reason !== "missing" && record.reason !== "invalid")) return false;
+  if (record.githubId !== undefined && typeof record.githubId !== "string") return false;
+  if ((record.event === "account.key_created" || record.event === "account.key_revoked") &&
+      (typeof record.githubId !== "string" || typeof record.keyId !== "string")) return false;
+  if ((record.event === "account.disabled" || record.event === "account.enabled") && typeof record.githubId !== "string") return false;
+  if (record.event === "account.rejected" &&
+      !(["missing", "invalid", "not_owned", "limit", "disabled"] as string[]).includes(String(record.reason))) return false;
   return true;
 }
 
@@ -110,6 +125,10 @@ export interface SecurityMetricsSnapshot {
   serviceBindings: number;
   serviceUnbindings: number;
   serviceAuthFailures: number;
+  signInsStarted: number;
+  accountKeysCreated: number;
+  accountKeysRevoked: number;
+  accountRejections: Record<AccountRejectionReason, number>;
 }
 
 export class SecurityMetrics {
@@ -129,6 +148,10 @@ export class SecurityMetrics {
     serviceBindings: 0,
     serviceUnbindings: 0,
     serviceAuthFailures: 0,
+    signInsStarted: 0,
+    accountKeysCreated: 0,
+    accountKeysRevoked: 0,
+    accountRejections: { missing: 0, invalid: 0, not_owned: 0, limit: 0, disabled: 0 },
   };
 
   recordAuthFailure(reason: AuthFailureReason) { this.values.authFailures[reason] += 1; }
@@ -149,5 +172,9 @@ export class SecurityMetrics {
   recordServiceBound() { this.values.serviceBindings += 1; }
   recordServiceUnbound() { this.values.serviceUnbindings += 1; }
   recordServiceAuthFailure() { this.values.serviceAuthFailures += 1; }
+  recordSignInStarted() { this.values.signInsStarted += 1; }
+  recordAccountKeyCreated() { this.values.accountKeysCreated += 1; }
+  recordAccountKeyRevoked() { this.values.accountKeysRevoked += 1; }
+  recordAccountRejection(reason: AccountRejectionReason) { this.values.accountRejections[reason] += 1; }
   snapshot(): SecurityMetricsSnapshot { return structuredClone(this.values); }
 }
