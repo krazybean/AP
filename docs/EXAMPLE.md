@@ -28,8 +28,8 @@ node examples/hello-app.mjs
 You will see something like this:
 
 ```text
-Your app is live at: https://ap.krazybean.com/c/5f3dd3e2-0486-4210-b9f1-24a871bd7e3c
-Try it: curl "https://ap.krazybean.com/c/5f3dd3e2-0486-4210-b9f1-24a871bd7e3c/hello?name=Sam"
+Your app is live at: https://apchannels.dev/c/5f3dd3e2-0486-4210-b9f1-24a871bd7e3c
+Try it: curl "https://apchannels.dev/c/5f3dd3e2-0486-4210-b9f1-24a871bd7e3c/hello?name=Sam"
 ```
 
 Leave this terminal open. Your app is running in it.
@@ -39,7 +39,7 @@ Leave this terminal open. Your app is running in it.
 Open a **second** terminal. Copy the `Try it` line from step 2 and run it:
 
 ```bash
-curl "https://ap.krazybean.com/c/<your-channel>/hello?name=Sam"
+curl "https://apchannels.dev/c/<your-channel>/hello?name=Sam"
 ```
 
 You get:

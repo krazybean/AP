@@ -30,7 +30,8 @@ export function parseChannelHost(host: string, configuredBaseDomain: string) {
 export function classifyChannelHost(host: string, configuredBaseDomain: string): string | "invalid" | null {
   const base = normalizeBaseDomain(configuredBaseDomain);
   const candidate = hostWithoutPort(host);
-  if (!candidate || (candidate !== base && !candidate.endsWith(`.${base}`))) return null;
+  // The bare base domain is AP's own address; only names under it are channel hosts.
+  if (!candidate || !candidate.endsWith(`.${base}`)) return null;
   const channel = parseChannelHost(host, base);
   return channel ?? "invalid";
 }

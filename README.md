@@ -57,7 +57,7 @@ curl http://localhost:4117/c/<channel>/
 # the app's APP description: what it is and which routes it exposes
 ```
 
-To connect the reference app to the hosted instance instead, run `AP_URL=https://ap.krazybean.com npm run mock:downstream`. Add `AP_EXPOSURE=isolated-host` to give the channel its own hostname under apchannels.dev.
+To connect the reference app to the hosted instance instead, run `AP_URL=https://apchannels.dev npm run mock:downstream`. Add `AP_EXPOSURE=isolated-host` to give the channel its own hostname such as `<channel>.apchannels.dev`.
 
 To connect your own application, see [docs/INTEGRATION.md](docs/INTEGRATION.md). The uplink is plain HTTP, so any language with an HTTP client can implement it without an AP library.
 
@@ -79,8 +79,8 @@ To connect your own application, see [docs/INTEGRATION.md](docs/INTEGRATION.md).
 The private app opens every connection. Public paths map directly into its namespace:
 
 ```text
-https://ap.krazybean.com/c/abc123           -> /
-https://ap.krazybean.com/c/abc123/projects  -> /projects
+https://apchannels.dev/c/abc123           -> /
+https://apchannels.dev/c/abc123/projects  -> /projects
 ```
 
 ### The five terms

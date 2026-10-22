@@ -52,7 +52,7 @@ Applications may implement the current shape for interoperability experiments, b
 Given public channel:
 
 ```text
-https://ap.krazybean.com/c/abc123
+https://apchannels.dev/c/abc123
 ```
 
 AP maps:
