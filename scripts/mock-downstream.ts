@@ -1,7 +1,12 @@
 const apBase = process.env.AP_URL ?? "http://localhost:4117";
 
-const created = await fetch(`${apBase}/channels`, { method: "POST" });
-if (!created.ok) throw new Error(`Failed to create channel: ${created.status}`);
+// AP_EXPOSURE=isolated-host gives the channel its own hostname (needs AP_CHANNEL_BASE_DOMAIN on the AP side).
+const exposure = process.env.AP_EXPOSURE;
+const created = await fetch(`${apBase}/channels`, {
+  method: "POST",
+  ...(exposure ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ exposure: { mode: exposure } }) } : {}),
+});
+if (!created.ok) throw new Error(`Failed to create channel: ${created.status} ${await created.text()}`);
 
 const { channel, secret, url } = (await created.json()) as {
   channel: string;
@@ -11,7 +16,7 @@ const { channel, secret, url } = (await created.json()) as {
 
 console.log("Mock APP downstream connected");
 console.log(`Channel: ${channel}`);
-console.log(`Public root: ${apBase}${url}`);
+console.log(`Public root: ${new URL(url, apBase)}`);
 console.log("Waiting for requests...");
 
 while (true) {

@@ -5,3 +5,11 @@ export function requestBodyLimit() {
   }
   return limit;
 }
+
+export function defaultExposureMode() {
+  const mode = process.env.AP_DEFAULT_EXPOSURE ?? "path";
+  if (mode !== "path" && mode !== "isolated-host") {
+    throw new Error("AP_DEFAULT_EXPOSURE must be path or isolated-host");
+  }
+  return mode;
+}
