@@ -41,7 +41,7 @@ These are the same steps the helper does.
 **Step 1.** Ask AP for a code.
 
 ```bash
-curl -s -X POST https://ap.krazybean.com/auth/device
+curl -s -X POST https://apchannels.dev/auth/device
 ```
 
 You get:
@@ -55,7 +55,7 @@ You get:
 **Step 3.** Ask AP for your key. Use the `deviceId` from step 1.
 
 ```bash
-curl -s -X POST https://ap.krazybean.com/auth/device/token \
+curl -s -X POST https://apchannels.dev/auth/device/token \
   -H 'content-type: application/json' \
   -d '{"deviceId":"apd_..."}'
 ```
@@ -93,7 +93,7 @@ Your Google email is shown as your `login`. GitHub and Google are separate accou
 Send it as the `X-AP-Key` header on every call your app makes to AP.
 
 ```bash
-curl -s -X POST https://ap.krazybean.com/channels -H "X-AP-Key: apk_..."
+curl -s -X POST https://apchannels.dev/channels -H "X-AP-Key: apk_..."
 ```
 
 The example app reads it from `AP_KEY`:
@@ -126,13 +126,13 @@ What never needs it: `/auth/...` (that's how you get it), `/c/...` and isolated 
 See your keys (never the secret part):
 
 ```bash
-curl -s https://ap.krazybean.com/keys -H "X-AP-Key: apk_..."
+curl -s https://apchannels.dev/keys -H "X-AP-Key: apk_..."
 ```
 
 Delete one you lost or leaked, using its `keyId` from that list:
 
 ```bash
-curl -s -X DELETE https://ap.krazybean.com/keys/<keyId> -H "X-AP-Key: apk_..."
+curl -s -X DELETE https://apchannels.dev/keys/<keyId> -H "X-AP-Key: apk_..."
 ```
 
 ## If something goes wrong

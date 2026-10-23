@@ -7,7 +7,7 @@ The hosted instance uses `apchannels.dev` with DNS on Cloudflare. Substitute you
 Before you start, you need:
 
 - AP deployed on Vercel with Redis configured (`AP_BROKER=redis` and the Upstash credentials; see [OPERATIONS.md](OPERATIONS.md#broker-selection))
-- a domain dedicated to channels. Use a separate domain or subdomain, not the one AP itself is served from, because every hostname under it is handed to channel traffic.
+- a domain dedicated to channels. Every hostname under it is handed to channel traffic, so AP's own address must be either a different domain or the bare domain itself (the hosted instance serves AP at `https://apchannels.dev`; see [Serving AP from the bare domain](#serving-ap-from-the-bare-domain)).
 
 ## 1. Add the wildcard domain to the AP project
 
@@ -70,7 +70,7 @@ Environment variables apply only to new deployments, so redeploy: **Deployments 
 ## 5. Create an isolated channel
 
 ```bash
-curl -s -X POST https://ap.krazybean.com/channels \
+curl -s -X POST https://apchannels.dev/channels \
   -H 'content-type: application/json' \
   -d '{"exposure":{"mode":"isolated-host"}}'
 ```
@@ -99,10 +99,10 @@ Play both sides in two terminals. Start the private app first, because a client 
 CH=<channel>
 SECRET='<secret>'
 REQ=""
-while [ -z "$REQ" ]; do echo "waiting..."; REQ=$(curl -s https://ap.krazybean.com/channels/$CH/next -H "authorization: Bearer $SECRET"); done
+while [ -z "$REQ" ]; do echo "waiting..."; REQ=$(curl -s https://apchannels.dev/channels/$CH/next -H "authorization: Bearer $SECRET"); done
 echo "$REQ"
 ID=$(echo "$REQ" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-curl -s -X POST https://ap.krazybean.com/channels/$CH/responses/$ID \
+curl -s -X POST https://apchannels.dev/channels/$CH/responses/$ID \
   -H "authorization: Bearer $SECRET" -H 'content-type: application/json' \
   -d '{"statusCode":200,"body":{"hello":"from my app"}}'
 ```
@@ -126,7 +126,7 @@ A `504` with `downstream_timeout` means the request reached the channel but noth
 The reference app does the same thing in one command, and prints the channel's address:
 
 ```bash
-AP_URL=https://ap.krazybean.com AP_EXPOSURE=isolated-host npm run mock:downstream
+AP_URL=https://apchannels.dev AP_EXPOSURE=isolated-host npm run mock:downstream
 ```
 
 ## 7. Optional: make isolated hosts the default
@@ -139,8 +139,23 @@ Channels that don't ask for an exposure mode are path channels. To give them the
 
 Apps can still ask for a path channel with `{"exposure":{"mode":"path"}}`. Before turning this on, check that the apps you run use the `url` AP returns rather than building `/c/<channel>` themselves, since isolated channels return `404` on that form. `AP_DEFAULT_EXPOSURE` accepts only `path` (the default) or `isolated-host`; any other value stops AP at startup.
 
+## Serving AP from the bare domain
+
+AP treats the bare base domain (`apchannels.dev`) as its own address and every name under it as a channel. To serve AP there:
+
+1. In Vercel, open the AP project → **Settings → Domains → Add Existing**, enter `apchannels.dev` and assign it to **Production**. Vercel shows the A record it wants.
+2. In Cloudflare, set the apex record (`@`, type A) to that value with **DNS only** (grey cloud). Remove any parking record for the apex.
+3. Check it:
+
+```bash
+curl -s https://apchannels.dev/health
+```
+
+It should return `"service":"ap"`. Don't use a subdomain such as `api.apchannels.dev` for AP: AP would treat it as a malformed channel host and answer `404`.
+
 ## Behavior on isolated hostnames
 
+- The bare `<base-domain>` is AP itself; any other name under it that isn't a channel ID returns `404`.
 - Every path on `<channel>.<base-domain>`, including `/health`, `/metrics` and `/channels/*`, is application traffic for that channel.
 - The shared form `/c/<channel>` returns `404` for an isolated channel; give clients the absolute URL from creation.
 - Channels still expire after 15 minutes without activity.
