@@ -58,6 +58,38 @@ Planned work:
 - support for MCP and other AI-facing protocols where an adapter is useful
 - ecosystem conventions around a stable AP traffic plane
 
+## Versioning
+
+AP follows [semantic versioning](https://semver.org/). `1.0.0` is the first stable release; before it, AP was pre-release.
+
+**What the version number covers** (a breaking change here needs a major bump):
+
+- HTTP routes, methods, status codes and the JSON error codes they return, such as `sign_in_expired` and `channel_not_owned`
+- request and response envelopes in [INTEGRATION.md](INTEGRATION.md) and [SERVICES.md](SERVICES.md)
+- environment variables and their documented values
+- security semantics: authentication, authorization, ownership and origin isolation
+
+**What it does not cover:**
+
+- the APP document shape in [APP-1.0.md](APP-1.0.md), which is not frozen and has its own `APP/1.0` identifier
+- internal names and storage layout, such as the `githubId` field and Redis key names
+- reference scripts and examples
+- the contents of operator-only views (`/admin/*`, `/metrics`) beyond the documented fields
+
+**How versions move:**
+
+- **Patch** (`1.0.x`): bug fixes and security fixes that change no documented behavior.
+- **Minor** (`1.x.0`): additive changes. New routes, optional request fields, new env vars that default to off, new sign-in providers, and new error codes for new conditions. Clients must tolerate unknown fields and unknown error codes.
+- **Major** (`2.0.0`, `3.0.0`): removing or changing documented behavior. This is also where the routing (2.0) and interoperability (3.0) goals above land.
+- A documented behavior is deprecated for at least one minor release, and noted in the changelog, before a major release removes it.
+- Security fixes may tighten behavior in a patch or minor release when the old behavior was unsafe. These are called out in the changelog.
+
+**Cutting a release:**
+
+1. Move the `Unreleased` changelog entries under a dated version heading.
+2. Set the version in `package.json`, `package-lock.json` and `apVersion` in `src/server.ts`.
+3. Merge to `main`, then tag `vX.Y.Z` on the merge commit.
+
 ## Non-goals
 
 AP is not intended to become:
