@@ -1,7 +1,7 @@
-# Signing in with GitHub
+# Signing in with GitHub or Google
 
 An **AP key** proves who you are. It looks like `apk_...`.
-You get one by signing in with GitHub. It takes about one minute.
+You get one by signing in with GitHub, or with Google if the operator turned it on. It takes about one minute.
 
 Do you need one? Only if the AP you use says `account_required`.
 Without a key, AP works the same as before.
@@ -67,6 +67,27 @@ curl -s -X POST https://ap.krazybean.com/auth/device/token \
 | `sign_in_expired` | You took more than 15 minutes, or already got the key. Start again at step 1. |
 | `sign_in_denied` | You clicked Cancel on GitHub. Start again at step 1. |
 
+### Signing in with Google
+
+Add `"provider":"google"` to both calls. Without `provider`, AP uses GitHub.
+
+```bash
+curl -s -X POST https://ap.krazybean.com/auth/device \
+  -H 'content-type: application/json' -d '{"provider":"google"}'
+```
+
+The reply has the same shape; its `url` is Google's device page (`https://www.google.com/device`). Then poll with the same `provider`:
+
+```bash
+curl -s -X POST https://ap.krazybean.com/auth/device/token \
+  -H 'content-type: application/json' \
+  -d '{"deviceId":"apd_...","provider":"google"}'
+```
+
+AP remembers which provider each sign-in started with. A poll that names a different one gets `400 provider_mismatch`. A Google account whose email Google has not verified gets `sign_in_denied`.
+
+Your Google email is shown as your `login`. GitHub and Google are separate accounts, even for the same person: AP never links them by email, and channels and services made under one are not visible to the other.
+
 ## Use your key
 
 Send it as the `X-AP-Key` header on every call your app makes to AP.
@@ -122,7 +143,10 @@ curl -s -X DELETE https://ap.krazybean.com/keys/<keyId> -H "X-AP-Key: apk_..."
 | `account_key_invalid` | The key is wrong, deleted, or the account is turned off | Run `npm run login` again |
 | `account_channel_limit` | You already have 10 live channels | Stop one of your apps, or wait 15 minutes |
 | `channel_not_owned` | That channel was made with a different key | Use the key that made it |
-| `sign_in_not_configured` | This AP doesn't have GitHub sign-in turned on | Ask whoever runs it |
+| `sign_in_not_configured` | This AP doesn't have that provider's sign-in turned on | Ask whoever runs it |
+| `unknown_provider` | `provider` was something other than `github` or `google` | Use one of those |
+| `provider_mismatch` | You polled with a different provider than you started with | Poll with the same `provider` |
+| `github_error` / `google_error` | The provider could not be reached or refused AP's request | Try again in a minute |
 | `account_disabled` | The operator turned your account off | Ask whoever runs it |
 
 ---
@@ -137,6 +161,15 @@ curl -s -X DELETE https://ap.krazybean.com/keys/<keyId> -H "X-AP-Key: apk_..."
 4. Tick **Enable Device Flow** and save.
 5. Copy the **Client ID**. You don't need a client secret.
 
+### 1b. Optional: make a Google OAuth client
+
+1. In the Google Cloud console, open **APIs & Services → OAuth consent screen** and configure it (external is fine). The only scopes AP asks for are `openid` and `email`.
+2. Go to **Credentials → Create credentials → OAuth client ID**.
+3. Set **Application type** to **TVs and Limited Input devices**. Name it `AP`.
+4. Copy the **Client ID** and **Client secret**. Unlike GitHub, Google's device flow needs the secret. AP keeps it on the server and never logs or returns it.
+
+Google's consent screen starts in *Testing* mode, where only listed test users can sign in. Publish the app to let anyone in.
+
 ### 2. Set the environment variables
 
 In Vercel: **Settings → Environment Variables**, then redeploy.
@@ -144,6 +177,8 @@ In Vercel: **Settings → Environment Variables**, then redeploy.
 | Key | Value | What it does |
 | --- | --- | --- |
 | `AP_GITHUB_CLIENT_ID` | the Client ID | Turns on sign-in. Without it, `/auth/device` answers `503 sign_in_not_configured`. |
+| `AP_GOOGLE_CLIENT_ID` | the Google Client ID | Turns on Google sign-in. Needs `AP_GOOGLE_CLIENT_SECRET` too; if either is missing, Google is off and `provider: "google"` answers `503 sign_in_not_configured`. |
+| `AP_GOOGLE_CLIENT_SECRET` | the Google Client secret | Server-side only. |
 | `AP_REQUIRE_ACCOUNT` | `true` | Requires a key on every management and downstream call. Leave it unset while testing to allow anonymous use. |
 | `AP_ADMIN_TOKEN` | a long random string | Turns on the admin endpoints below. |
 | `AP_ACCOUNT_CHANNEL_LIMIT` | `10` (default) | Live channels per account. |
@@ -153,16 +188,20 @@ Accounts need the Redis broker in production; the memory broker forgets them on 
 Turn sign-in on first, let people get keys, and only then set `AP_REQUIRE_ACCOUNT=true`.
 Channels made before that, without a key, can't be polled with a key once it's on; they close on their own within 15 minutes.
 
+### Who an account is
+
+An account id is the GitHub user id for GitHub sign-ins (`1001`), and `google:` plus Google's stable `sub` for Google sign-ins (`google:110248495921238986420`). Google's email is only the display `login`; it can change and is never used to find or link accounts. The internal field is still called `githubId` in storage, audit events and admin output. Existing GitHub accounts need no migration.
+
 ### 3. Watch for anything odd
 
 All admin calls need `Authorization: Bearer <AP_ADMIN_TOKEN>`. Without it they answer `404`.
 
 | Call | What you get |
 | --- | --- |
-| `GET /admin/accounts` | every account: GitHub id, login, when it joined, whether it's turned off |
-| `GET /admin/accounts/<githubId>` | its keys (with last use), its live channels, and channels created per day for the last 8 days |
-| `POST /admin/accounts/<githubId>/disable` | turns the account off and deletes its keys; its apps stop at their next call |
-| `POST /admin/accounts/<githubId>/enable` | lets the person sign in again (they need a new key) |
+| `GET /admin/accounts` | every account: id (`githubId`), login, when it joined, whether it's turned off |
+| `GET /admin/accounts/<id>` | its keys (with last use), its live channels, and channels created per day for the last 8 days |
+| `POST /admin/accounts/<id>/disable` | turns the account off and deletes its keys; its apps stop at their next call |
+| `POST /admin/accounts/<id>/enable` | lets the person sign in again (they need a new key) |
 
 `/metrics` also counts sign-ins, keys created and revoked, and rejections by reason (`missing`, `invalid`, `not_owned`, `limit`, `disabled`).
-The audit log records `account.key_created`, `account.key_revoked`, `account.disabled`, `account.enabled` and `account.rejected`, with the GitHub id but never the key.
+The audit log records `account.key_created`, `account.key_revoked`, `account.disabled`, `account.enabled` and `account.rejected`, with the account id but never the key.

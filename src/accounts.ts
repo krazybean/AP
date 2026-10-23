@@ -29,7 +29,11 @@ export interface AuthenticatedAccount {
   keyId: string;
 }
 
+export type SignInProvider = "github" | "google";
+
 export interface DeviceLogin {
+  // Records saved before Google sign-in have no provider and are GitHub's.
+  provider?: SignInProvider;
   deviceCode: string;
   interval: number;
   expiresAt: number;

@@ -1,14 +1,16 @@
 import type { FastifyInstance } from "fastify";
 
-import { AccountDisabledError, DEVICE_ID_PREFIX, newDeviceId, type AuthenticatedAccount } from "./accounts.js";
+import { AccountDisabledError, DEVICE_ID_PREFIX, newDeviceId, type AuthenticatedAccount, type SignInProvider } from "./accounts.js";
 import type { Broker } from "./broker.js";
 import { GitHubError, githubClientFromEnv, type GitHubDeviceClient } from "./github.js";
+import { GoogleError, GoogleUnverifiedEmailError, googleClientFromEnv, type GoogleDeviceClient } from "./google.js";
 import type { AccountRejectionReason, SecurityAuditEvent, SecurityMetrics } from "./security-telemetry.js";
 
 export const ACCOUNT_KEY_HEADER = "x-ap-key";
 const SIGN_INS_PER_IP_PER_HOUR = 10;
 const DEVICE_ID = new RegExp(`^${DEVICE_ID_PREFIX}[A-Za-z0-9_-]{32}$`);
-const GITHUB_ID = /^\d{1,20}$/;
+// GitHub accounts are plain numeric ids; Google accounts are `google:` plus the numeric `sub`.
+const GITHUB_ID = /^(?:\d{1,20}|google:\d{1,40})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KEY_LABEL = /^[\x20-\x7e]{1,64}$/;
 
@@ -31,6 +33,7 @@ type Audit = (request: { id: string }, event: { event: SecurityAuditEvent["event
 export interface AccountRouteDeps {
   broker: Broker;
   github?: GitHubDeviceClient;
+  google?: GoogleDeviceClient;
   audit: Audit;
   securityMetrics: SecurityMetrics;
   brokerUnavailable: (error: unknown, reply: any, request?: { id: string }) => boolean;
@@ -101,28 +104,48 @@ export type AccountGate = ReturnType<typeof createAccountGate>;
 
 export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps) {
   const { broker, audit, securityMetrics, brokerUnavailable } = deps;
-  const github = deps.github ?? githubClientFromEnv();
+  const clients: Record<SignInProvider, GitHubDeviceClient | GoogleDeviceClient | undefined> = {
+    github: deps.github ?? githubClientFromEnv(),
+    google: deps.google ?? googleClientFromEnv(),
+  };
   const gate = createAccountGate(deps);
   accountChannelLimit();
 
-  function githubFailed(error: unknown, reply: any, request: { id: string; log: { warn: (object: unknown, message?: string) => void } }) {
-    if (!(error instanceof GitHubError)) return false;
-    request.log.warn({ event: "github.error", reason: error.message }, "GitHub sign-in call failed");
-    reply.code(502).send({ error: "github_error" });
+  // undefined: the client sent no provider. null: it sent something that is not a provider.
+  function requestedProvider(value: unknown): SignInProvider | undefined | null {
+    if (value === undefined) return undefined;
+    return value === "github" || value === "google" ? value : null;
+  }
+
+  function providerFailed(error: unknown, reply: any, request: { id: string; log: { warn: (object: unknown, message?: string) => void } }) {
+    if (error instanceof GoogleUnverifiedEmailError) {
+      request.log.warn({ event: "google.error", reason: error.message }, "Google sign-in refused");
+      reply.code(403).send({ error: "sign_in_denied" });
+      return true;
+    }
+    const provider = error instanceof GitHubError ? "github" : error instanceof GoogleError ? "google" : undefined;
+    if (!provider) return false;
+    request.log.warn({ event: `${provider}.error`, reason: (error as Error).message }, `${provider} sign-in call failed`);
+    reply.code(502).send({ error: `${provider}_error` });
     return true;
   }
 
-  // Step 1: ask GitHub for a code the person types in at github.com/login/device.
-  app.post("/auth/device", async (request, reply) => {
-    if (!github) return reply.code(503).send({ error: "sign_in_not_configured" });
+  // Step 1: ask the provider for a code the person types in at its device page.
+  app.post<{ Body: { provider?: unknown } | undefined }>("/auth/device", async (request, reply) => {
+    const requested = requestedProvider(request.body?.provider);
+    if (requested === null) return reply.code(400).send({ error: "unknown_provider" });
+    const provider = requested ?? "github";
+    const client = clients[provider];
+    if (!client) return reply.code(503).send({ error: "sign_in_not_configured" });
     try {
       if (!(await broker.accounts.admit(`sign-in:${deps.sourceKey(request.ip)}`, SIGN_INS_PER_IP_PER_HOUR, 3_600))) {
         return reply.header("retry-after", "3600").code(429).send({ error: "sign_in_rate_limited" });
       }
-      const grant = await github.startDevice();
+      const grant = await client.startDevice();
       const deviceId = newDeviceId();
       const now = Date.now();
       await broker.accounts.saveDeviceLogin(deviceId, {
+        provider,
         deviceCode: grant.deviceCode,
         interval: grant.interval,
         expiresAt: now + grant.expiresIn * 1_000,
@@ -131,14 +154,17 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       securityMetrics.recordSignInStarted();
       return reply.code(201).send({ code: grant.userCode, url: grant.verificationUri, deviceId, expiresIn: grant.expiresIn, interval: grant.interval });
     } catch (error) {
-      if (githubFailed(error, reply, request) || brokerUnavailable(error, reply, request)) return;
+      if (providerFailed(error, reply, request) || brokerUnavailable(error, reply, request)) return;
       throw error;
     }
   });
 
   // Step 2: poll until the person approves; the approval is swapped for an AP key once.
-  app.post<{ Body: { deviceId?: unknown; label?: unknown } }>("/auth/device/token", async (request, reply) => {
-    if (!github) return reply.code(503).send({ error: "sign_in_not_configured" });
+  app.post<{ Body: { deviceId?: unknown; label?: unknown; provider?: unknown } }>("/auth/device/token", async (request, reply) => {
+    const requested = requestedProvider(request.body?.provider);
+    if (requested === null) return reply.code(400).send({ error: "unknown_provider" });
+    // A client that names a provider needs it configured; one that does not is judged by the stored login below.
+    if (requested ? !clients[requested] : !clients.github && !clients.google) return reply.code(503).send({ error: "sign_in_not_configured" });
     const deviceId = request.body?.deviceId;
     const label = request.body?.label;
     if (typeof deviceId !== "string" || !DEVICE_ID.test(deviceId)) return reply.code(400).send({ error: "sign_in_expired" });
@@ -146,10 +172,15 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     try {
       const login = await broker.accounts.deviceLogin(deviceId);
       if (!login) return reply.code(400).send({ error: "sign_in_expired" });
+      // The provider recorded at start decides who is polled; the client's claim can only agree with it.
+      const provider = login.provider ?? "github";
+      if (requested && requested !== provider) return reply.code(400).send({ error: "provider_mismatch" });
+      const client = clients[provider];
+      if (!client) return reply.code(503).send({ error: "sign_in_not_configured" });
       const now = Date.now();
-      // GitHub rejects polls faster than its interval, so early polls are answered without asking it.
+      // Providers reject polls faster than their interval, so early polls are answered without asking.
       if (now < login.nextPollAt) return reply.code(202).send({ status: "waiting", interval: login.interval });
-      const result = await github.pollToken(login.deviceCode);
+      const result = await client.pollToken(login.deviceCode);
       if (result.status === "pending" || result.status === "slow_down") {
         const interval = result.status === "slow_down" ? Math.max(result.interval, login.interval + 5) : login.interval;
         await broker.accounts.saveDeviceLogin(deviceId, { ...login, interval, nextPollAt: now + interval * 1_000 });
@@ -158,7 +189,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       await broker.accounts.deleteDeviceLogin(deviceId);
       if (result.status === "expired") return reply.code(400).send({ error: "sign_in_expired" });
       if (result.status === "denied") return reply.code(403).send({ error: "sign_in_denied" });
-      const user = await github.user(result.accessToken);
+      const user = await client.user(result.accessToken);
       let created;
       try {
         created = await broker.accounts.createKey(user.id, user.login, label as string | undefined);
@@ -171,7 +202,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
       audit(request, { event: "account.key_created", githubId: user.id, keyId: created.keyId });
       return reply.code(201).send({ key: created.key, keyId: created.keyId, login: user.login });
     } catch (error) {
-      if (githubFailed(error, reply, request) || brokerUnavailable(error, reply, request)) return;
+      if (providerFailed(error, reply, request) || brokerUnavailable(error, reply, request)) return;
       throw error;
     }
   });
