@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- `npm run login -- google` signs in with Google; plain `npm run login` still uses GitHub.
+
 ## [1.0.0] - 2026-10-23
 
 First stable release. See [docs/ROADMAP.md](docs/ROADMAP.md#versioning) for what the version number promises.

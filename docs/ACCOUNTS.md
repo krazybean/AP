@@ -16,6 +16,8 @@ cd AP
 npm run login
 ```
 
+To sign in with Google instead, run `npm run login -- google` (or set `AP_PROVIDER=google`). The rest is the same, with Google's page and code.
+
 It prints:
 
 ```text
