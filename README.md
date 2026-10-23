@@ -141,6 +141,7 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/`, `/privacy` | AP's landing page and privacy policy (HTML; text lives in `src/site.ts`) |
 | `GET` | `/health` | AP and broker health |
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
 | `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub (or Google, with `"provider":"google"`) and get an AP key |
