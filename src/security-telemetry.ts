@@ -24,7 +24,7 @@ export type SecurityAuditEvent =
   | (AuditBase & { event: "service.instance_bound" | "service.instance_unbound"; serviceId: string; channel: string })
   | (AuditBase & { event: "service.auth_rejected"; reason: ServiceAuthFailureReason })
   | (AuditBase & { event: "account.key_created" | "account.key_revoked"; githubId: string; keyId: string })
-  | (AuditBase & { event: "account.disabled" | "account.enabled"; githubId: string })
+  | (AuditBase & { event: "account.disabled" | "account.enabled" | "account.deleted"; githubId: string })
   | (AuditBase & { event: "account.rejected"; reason: AccountRejectionReason; githubId?: string });
 
 export interface AuditSink {
@@ -66,6 +66,7 @@ const eventKeys: Record<SecurityAuditEvent["event"], string[]> = {
   "account.key_revoked": ["event", "timestamp", "requestId", "githubId", "keyId"],
   "account.disabled": ["event", "timestamp", "requestId", "githubId"],
   "account.enabled": ["event", "timestamp", "requestId", "githubId"],
+  "account.deleted": ["event", "timestamp", "requestId", "githubId"],
   "account.rejected": ["event", "timestamp", "requestId", "reason", "githubId"],
 };
 
@@ -103,7 +104,7 @@ export function isSecurityAuditEvent(value: unknown): value is SecurityAuditEven
   if (record.githubId !== undefined && typeof record.githubId !== "string") return false;
   if ((record.event === "account.key_created" || record.event === "account.key_revoked") &&
       (typeof record.githubId !== "string" || typeof record.keyId !== "string")) return false;
-  if ((record.event === "account.disabled" || record.event === "account.enabled") && typeof record.githubId !== "string") return false;
+  if ((record.event === "account.disabled" || record.event === "account.enabled" || record.event === "account.deleted") && typeof record.githubId !== "string") return false;
   if (record.event === "account.rejected" &&
       !(["missing", "invalid", "not_owned", "limit", "disabled"] as string[]).includes(String(record.reason))) return false;
   return true;

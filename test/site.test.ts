@@ -39,7 +39,7 @@ test("the landing page and privacy policy are served as locked-down HTML", async
 test("the privacy policy states the Google scopes, retention and contact", async () => {
   const app = buildTestApp(testBroker());
   const body = (await app.inject({ method: "GET", url: "/privacy" })).body;
-  for (const text of ["openid", "email", "Google API Services User Data Policy", "15 minutes", "GitHub issues", "does not sell"]) {
+  for (const text of ["openid", "email", "Google API Services User Data Policy", "15 minutes", "GitHub issues", "does not sell", "DELETE /account", "delete-my-account"]) {
     assert.ok(body.includes(text) || body.toLowerCase().includes(text.toLowerCase()), text);
   }
   await app.close();

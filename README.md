@@ -146,7 +146,8 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
 | `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub (or Google, with `"provider":"google"`) and get an AP key |
 | `GET`, `DELETE` | `/keys`, `/keys/:keyId` | List or revoke your AP keys |
-| `GET`, `POST` | `/admin/accounts[/:id[/disable\|/enable]]` | Operator view of accounts and usage (requires `AP_ADMIN_TOKEN`) |
+| `DELETE` | `/account` | Delete your account and everything AP keeps about it (send `{"confirm":"delete-my-account"}`) |
+| `GET`, `POST` | `/admin/accounts[/:id[/disable\|/enable]]`, `DELETE /admin/accounts/:id` | Operator view of accounts and usage, and account removal (requires `AP_ADMIN_TOKEN`) |
 | `POST` | `/channels` | Create a channel; optional `access` (bearer tokens, scopes) and `exposure` (isolated host) |
 | `GET` | `/channels/:channel/next` | Downstream waits for the next request |
 | `POST` | `/channels/:channel/responses/:requestId` | Downstream returns a response |
@@ -183,6 +184,22 @@ Current limits:
 - The APP schema and security model are not frozen.
 
 Use the hosted service for development and experiments, and don't assume production guarantees that aren't documented. The security model is described in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) and [docs/SECURITY-BASELINE.md](docs/SECURITY-BASELINE.md); operations, including broker selection and Redis outages, in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## Privacy and your data
+
+AP is built to keep as little as possible. Signing in is optional: without it, AP keeps no account or profile about you. With it, AP stores only your account id and email (or GitHub username), hashes of your AP keys and a few usage counts, and reads nothing else from your Google or GitHub account. Channel traffic is held only while it is delivered, for at most 15 minutes, and is never logged. AP sets no cookies and has no analytics or advertising.
+
+AP does write standard request logs (method, URL, client IP, status), so it is not accurate to say it stores nothing; the privacy policy at `/privacy` lists exactly what is kept and for how long.
+
+You can delete your account and everything AP keeps about it yourself:
+
+```bash
+curl -s -X DELETE https://apchannels.dev/account \
+  -H "X-AP-Key: apk_..." -H 'content-type: application/json' \
+  -d '{"confirm":"delete-my-account"}'
+```
+
+See [docs/ACCOUNTS.md](docs/ACCOUNTS.md#delete-your-account). Operators can remove an account with `DELETE /admin/accounts/:id`. If you change what AP collects or keeps, update the policy text in `src/site.ts` in the same change.
 
 ## Where AP is going
 

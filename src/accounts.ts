@@ -77,6 +77,8 @@ export interface AccountStore {
   listAccounts(): Promise<Account[]>;
   disableAccount(githubId: string): Promise<boolean>;
   enableAccount(githubId: string): Promise<boolean>;
+  // Removes the account and everything AP keeps about it: keys, channel and service ownership, usage counts.
+  deleteAccount(githubId: string): Promise<boolean>;
 }
 
 export function newAccountKey() {
@@ -115,6 +117,7 @@ export class MemoryAccountStore implements AccountStore {
   private readonly accountChannels = new Map<string, Set<string>>();
   private readonly owners = new Map<string, { githubId: string; expiresAt: number }>();
   private readonly services = new Map<string, string>();
+  private readonly accountServices = new Map<string, Set<string>>();
   private readonly created = new Map<string, number>();
 
   async saveDeviceLogin(deviceId: string, login: DeviceLogin) {
@@ -210,6 +213,9 @@ export class MemoryAccountStore implements AccountStore {
 
   async recordService(githubId: string, name: string) {
     this.services.set(name, githubId);
+    const names = this.accountServices.get(githubId) ?? new Set<string>();
+    names.add(name);
+    this.accountServices.set(githubId, names);
   }
 
   async serviceOwner(name: string) {
@@ -244,6 +250,19 @@ export class MemoryAccountStore implements AccountStore {
     const account = this.accounts.get(githubId);
     if (!account) return false;
     account.disabled = false;
+    return true;
+  }
+
+  async deleteAccount(githubId: string) {
+    if (!this.accounts.has(githubId)) return false;
+    for (const digest of this.accountKeys.get(githubId)?.values() ?? []) this.keys.delete(digest);
+    this.accountKeys.delete(githubId);
+    for (const channel of this.accountChannels.get(githubId) ?? []) this.owners.delete(channel);
+    this.accountChannels.delete(githubId);
+    for (const name of this.accountServices.get(githubId) ?? []) if (this.services.get(name) === githubId) this.services.delete(name);
+    this.accountServices.delete(githubId);
+    for (const day of recentDays()) this.created.delete(`${githubId}:${day}`);
+    this.accounts.delete(githubId);
     return true;
   }
 }
