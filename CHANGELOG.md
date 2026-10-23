@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-23
+
+First stable release. See [docs/ROADMAP.md](docs/ROADMAP.md#versioning) for what the version number promises.
+
+- Initial public release.
+
 - Accounts: sign in with Google too. Send `"provider":"google"` to `POST /auth/device` and `/auth/device/token`; no `provider` still means GitHub. `AP_GOOGLE_CLIENT_ID` and `AP_GOOGLE_CLIENT_SECRET` (both required) turn it on. Google accounts are stored as `google:<sub>` and are separate from GitHub accounts; the admin routes accept both id forms. New errors: `unknown_provider`, `provider_mismatch`, `google_error`. See `docs/ACCOUNTS.md`.
 
 - The hosted AP moved from ap.krazybean.com to `https://apchannels.dev`; docs, the example app and the login helper use it. The bare `AP_CHANNEL_BASE_DOMAIN` now serves AP itself instead of answering `404`, so AP and its isolated channels can share one domain.
@@ -19,7 +25,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Security: responses on shared `/c/{channel}` paths now carry a CSP sandbox and `X-Content-Type-Options: nosniff`, and drop `Service-Worker-Allowed`, so one channel's page cannot read AP or other channels. Isolated hosts are unchanged.
 
 - Docs: `docs/SETUP.md` walks through connecting a wildcard domain for isolated channel hostnames on Vercel.
-
-## [0.1.0] - TBD
-
-- Initial public release.

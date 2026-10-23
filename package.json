@@ -1,6 +1,6 @@
 {
   "name": "ai-proxy",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "AI traffic plane for exposing private applications through ordinary HTTPS.",
   "license": "MIT",
   "author": "Juan Castro",
