@@ -11,6 +11,7 @@ import type { GoogleDeviceClient } from "./google.js";
 import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
+import { LANDING_PAGE, PRIVACY_PAGE } from "./site.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
 import { validateServiceName } from "./services.js";
 
@@ -218,6 +219,16 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     reply.code(503).send({ error: "broker_unavailable" });
     return true;
   }
+
+  // AP's own pages. On isolated channel hosts the preHandler hook has already proxied the request.
+  const sitePage = (html: string) => async (_request: unknown, reply: any) => reply
+    .header("content-type", "text/html; charset=utf-8")
+    .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    .header("x-content-type-options", "nosniff")
+    .header("cache-control", "public, max-age=300")
+    .send(html);
+  app.get("/", sitePage(LANDING_PAGE));
+  app.get("/privacy", sitePage(PRIVACY_PAGE));
 
   app.get("/health", async (request, reply) => {
     if (await brokerHealthy()) {
