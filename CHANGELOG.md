@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-23
+
 - AP now serves a landing page at `/` and a privacy policy at `/privacy` on its own address (never on isolated channel hostnames). They are static HTML with a locked-down CSP and no scripts. The policy text is in `src/site.ts`; update it whenever what AP collects or keeps changes.
 
 - `npm run login -- google` signs in with Google; plain `npm run login` still uses GitHub.
