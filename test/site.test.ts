@@ -21,7 +21,7 @@ async function withBaseDomain<T>(value: string | undefined, run: () => Promise<T
 test("the landing page and privacy policy are served as locked-down HTML", async () => {
   await withBaseDomain("apchannels.test", async () => {
     const app = buildTestApp(testBroker());
-    for (const [url, heading] of [["/", "AP (AI Proxy)"], ["/privacy", "Privacy policy"]]) {
+    for (const [url, heading] of [["/", "Give a private application a public HTTPS URL."], ["/privacy", "Privacy policy"]]) {
       const response = await app.inject({ method: "GET", url, headers: { host: "apchannels.test" } });
       assert.equal(response.statusCode, 200, url);
       assert.match(String(response.headers["content-type"]), /^text\/html; charset=utf-8/);
@@ -30,6 +30,7 @@ test("the landing page and privacy policy are served as locked-down HTML", async
       assert.equal(response.headers["x-content-type-options"], "nosniff");
       assert.ok(response.body.includes(`<h1>${heading}</h1>`), url);
       assert.ok(!/<script/i.test(response.body), "no scripts");
+      assert.ok(!/<(?:img|link|iframe)[^>]+(?:src|href)="https?:/i.test(response.body.replace(/<a [^>]*>/g, "")), "no external subresources");
     }
     await app.close();
   });

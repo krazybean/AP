@@ -223,7 +223,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   // AP's own pages. On isolated channel hosts the preHandler hook has already proxied the request.
   const sitePage = (html: string) => async (_request: unknown, reply: any) => reply
     .header("content-type", "text/html; charset=utf-8")
-    .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
     .header("x-content-type-options", "nosniff")
     .header("cache-control", "public, max-age=300")
     .send(html);

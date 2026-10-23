@@ -4,7 +4,105 @@
 const REPO = "https://github.com/krazybean/AP";
 export const PRIVACY_UPDATED = "October 23, 2026";
 
-function page(title: string, description: string, body: string) {
+// The mark and flow diagram are inline SVG so the pages need no image files and the CSP can stay strict.
+const HEX_OUTER = "50,5 88.97,27.5 88.97,72.5 50,95 11.03,72.5 11.03,27.5";
+const HEX_INNER = "50,14 81.18,32 81.18,68 50,86 18.82,68 18.82,32";
+
+function logo(size: number, label = "AP") {
+  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 100 100" role="img" aria-label="${label}">
+<polygon points="${HEX_OUTER}" fill="none" stroke="#ff3b30" stroke-width="1" transform="translate(50 50) scale(1.04) translate(-50 -50)" opacity=".7"/>
+<polygon points="${HEX_OUTER}" fill="#0a0a0b" stroke="#f2f2f2" stroke-width="2.6" stroke-linejoin="miter"/>
+<polygon points="${HEX_INNER}" fill="none" stroke="#f2f2f2" stroke-width=".7" stroke-dasharray="2.4 2"/>
+<circle cx="50" cy="31" r="4.2" fill="#ff3b30"/>
+<text x="50" y="68" text-anchor="middle" font-family="system-ui,-apple-system,'Segoe UI',sans-serif" font-size="27" font-weight="800" letter-spacing="1" fill="#f2f2f2">AP</text>
+</svg>`;
+}
+
+const FAVICON = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><polygon points="${HEX_OUTER}" fill="#0a0a0b" stroke="#f2f2f2" stroke-width="6"/><circle cx="50" cy="33" r="7" fill="#ff3b30"/></svg>`)}`;
+
+function globe(cy: number) {
+  return `<g stroke="#d8d8dc" stroke-width="1" fill="none"><circle cx="130" cy="${cy}" r="24"/><ellipse cx="130" cy="${cy}" rx="10" ry="24"/><line x1="106" y1="${cy}" x2="154" y2="${cy}"/><line x1="130" y1="${cy - 24}" x2="130" y2="${cy + 24}"/></g>
+<text x="130" y="${cy + 42}" class="t">AI CLIENTS</text>`;
+}
+
+const DIAGRAM = `<svg class="diagram" viewBox="0 0 1000 390" role="img" aria-label="AI clients send HTTPS requests to AP. AP queues them. The private application polls outward, receives the request and returns its response through the same channel.">
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#ff5a4d" stroke-width="1.5"/></marker>
+<marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#d8d8dc" stroke-width="1.5"/></marker>
+</defs>
+<g fill="none" stroke="#3a3a40" stroke-width="1" stroke-dasharray="4 4"><rect x="10" y="45" width="240" height="325"/><rect x="330" y="45" width="340" height="325"/><rect x="750" y="45" width="240" height="325"/></g>
+<text x="130" y="30" class="t b">PUBLIC / CLIENT SIDE</text>
+<text x="500" y="30" class="t b">AP / PUBLIC RENDEZVOUS</text>
+<text x="870" y="30" class="t b">PRIVATE / APP SIDE</text>
+${globe(110)}${globe(205)}${globe(300)}
+<g fill="none" stroke="#ff5a4d" stroke-width="1.6" stroke-linecap="round">
+<path d="M154 110 C185 110 190 205 214 205"/><path d="M154 205 L214 205"/><path d="M154 300 C185 300 190 205 214 205"/>
+<path d="M214 205 L440 205" marker-end="url(#ar)"/>
+<path d="M538 275 C538 356 480 356 400 356 L160 356" marker-end="url(#ar)"/>
+<path d="M565 205 L742 205" marker-end="url(#ar)"/>
+<path d="M742 245 L565 245" marker-end="url(#ar)"/>
+</g>
+<path d="M742 165 L580 165" fill="none" stroke="#d8d8dc" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#aw)"/>
+<text x="330" y="196" class="t m" text-anchor="middle">REQUEST · HTTPS</text>
+<text x="320" y="347" class="t m" text-anchor="middle">RESPONSE · SAME CHANNEL</text>
+<text x="661" y="154" class="t m" text-anchor="middle">OUTBOUND POLL</text>
+<text x="661" y="196" class="t m" text-anchor="middle">QUEUED REQUEST</text>
+<text x="661" y="266" class="t m" text-anchor="middle">APPLICATION RESPONSE</text>
+<text x="500" y="75" class="t m" text-anchor="middle">STABLE PUBLIC NAMESPACE</text>
+<text x="500" y="100" class="t red" text-anchor="middle" font-size="17">/c/{channel}</text>
+<g transform="translate(500 205) scale(1.2) translate(-50 -50)">
+<polygon points="${HEX_OUTER}" fill="#0a0a0b" stroke="#f2f2f2" stroke-width="2"/><polygon points="${HEX_INNER}" fill="none" stroke="#f2f2f2" stroke-width=".6" stroke-dasharray="2.4 2"/>
+<circle cx="50" cy="31" r="3.6" fill="#ff3b30"/><text x="50" y="64" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="800" fill="#f2f2f2">AP</text></g>
+<text x="870" y="105" class="t b" font-size="15">APPLICATION</text>
+<g><rect x="800" y="125" width="140" height="105" rx="9" fill="#101012" stroke="#d8d8dc" stroke-width="1.2"/>
+<circle cx="815" cy="140" r="3" fill="#ff3b30"/><circle cx="826" cy="140" r="3" fill="#ff3b30" opacity=".6"/><circle cx="837" cy="140" r="3" fill="#d8d8dc"/>
+<g stroke="#8a8a92" stroke-width="2" stroke-linecap="round"><line x1="815" y1="165" x2="905" y2="165"/><line x1="815" y1="180" x2="885" y2="180"/><line x1="815" y1="195" x2="855" y2="195" stroke="#ff5a4d"/></g></g>
+<text x="870" y="262" class="t b">APP-OWNED ROUTES</text>
+<text x="870" y="280" class="t m" text-anchor="middle">/.../projects/...</text>
+</svg>`;
+
+const STYLE = `
+:root { color-scheme: dark; --bg: #0a0a0b; --panel: #101012; --fg: #ececee; --muted: #9b9ba3; --red: #ff3b30; --link: #ff6b5e; --rule: #2a2a2f; --code: #17171a;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh;
+  background-image: radial-gradient(60rem 28rem at 50% -8rem, rgba(255,59,48,.14), transparent 70%), linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px; background-position: center top, center top, center top; }
+main { max-width: 46rem; margin: 0 auto; padding: 1.25rem 16px 4rem; }
+main.wide { max-width: 64rem; }
+header { display: flex; align-items: center; gap: .75rem; padding-bottom: 1rem; border-bottom: 1px dashed var(--rule); margin-bottom: 2.5rem; }
+header a.brand { display: flex; align-items: center; gap: .6rem; color: var(--fg); text-decoration: none; font-family: var(--mono); letter-spacing: .18em; font-size: .85rem; font-weight: 700; }
+header nav { margin-left: auto; display: flex; gap: 1.25rem; }
+header nav a, footer a { color: var(--muted); text-decoration: none; font-family: var(--mono); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; }
+header nav a:hover, footer a:hover { color: var(--fg); }
+.mark { filter: drop-shadow(0 0 7px rgba(255,59,48,.55)); display: block; }
+header .mark { width: 32px; height: 32px; }
+h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; margin: 0 0 .5rem; letter-spacing: -.01em; }
+h2 { font-family: var(--mono); font-size: .8rem; letter-spacing: .2em; text-transform: uppercase; color: var(--fg); margin: 2.5rem 0 .75rem; padding-left: .7rem; border-left: 2px solid var(--red); }
+p, li { margin: .55rem 0; } ul { padding-left: 1.25rem; } li::marker { color: var(--red); }
+.kicker { font-family: var(--mono); font-size: .75rem; letter-spacing: .24em; text-transform: uppercase; color: var(--red); margin: 0 0 .75rem; }
+.lead { font-size: 1.2rem; color: #c9c9cf; max-width: 36rem; }
+.muted { color: var(--muted); }
+a { color: var(--link); text-underline-offset: 3px; }
+code { background: var(--code); border: 1px solid var(--rule); padding: .05rem .35rem; border-radius: 4px; font-family: var(--mono); font-size: .86em; }
+.hero { text-align: center; padding: 1rem 0 2rem; }
+.hero .mark { width: 132px; height: 132px; margin: 0 auto 1.5rem; filter: drop-shadow(0 0 16px rgba(255,59,48,.6)); }
+.hero .lead { margin-left: auto; margin-right: auto; }
+.diagram { width: 100%; height: auto; display: block; margin: 1.5rem 0 .5rem; }
+.diagram .t { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; fill: #c9c9cf; text-anchor: middle; }
+.diagram .t.b { font-weight: 700; fill: #f2f2f2; } .diagram .t.m { fill: #b8b8c0; font-size: 10px; letter-spacing: .12em; paint-order: stroke; stroke: #0a0a0b; stroke-width: 7px; } .diagram .t.red { fill: #ff5a4d; stroke: none; letter-spacing: .04em; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin-top: 1rem; }
+.cards a { display: block; padding: 1rem 1.1rem; border: 1px dashed #3a3a40; background: var(--panel); color: var(--fg); text-decoration: none; border-radius: 4px; }
+.cards a:hover { border-color: var(--red); box-shadow: 0 0 0 1px rgba(255,59,48,.35), 0 0 18px rgba(255,59,48,.12); }
+.cards b { display: block; font-family: var(--mono); font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--red); margin-bottom: .25rem; }
+.cards span { color: var(--muted); font-size: .92rem; }
+.doc { background: rgba(16,16,18,.7); border: 1px solid var(--rule); border-radius: 6px; padding: 1.5rem 1.5rem 2rem; }
+.doc h1 { margin-top: 0; }
+footer { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px dashed var(--rule); display: flex; gap: 1.25rem; flex-wrap: wrap; }
+@media (max-width: 36rem) { header nav { gap: .9rem; } .doc { padding: 1.1rem 1rem 1.5rem; } .diagram { min-width: 38rem; } .scroll { overflow-x: auto; } }
+`;
+
+function page(title: string, description: string, body: string, wide = false) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -12,29 +110,15 @@ function page(title: string, description: string, body: string) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 <meta name="description" content="${description}">
-<style>
-:root { color-scheme: light dark; --bg: #fff; --fg: #1c1c1e; --muted: #5b5b62; --link: #0b57d0; --rule: #e3e3e8; --code: #f3f3f6; }
-@media (prefers-color-scheme: dark) { :root { --bg: #131316; --fg: #ececf0; --muted: #a0a0aa; --link: #8ab4f8; --rule: #2a2a31; --code: #1d1d22; } }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 42rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
-h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; }
-h2 { font-size: 1.25rem; margin: 2.25rem 0 .5rem; }
-p, li { margin: .5rem 0; }
-.lead { font-size: 1.2rem; color: var(--muted); }
-.muted { color: var(--muted); }
-a { color: var(--link); }
-code { background: var(--code); padding: .1rem .35rem; border-radius: 4px; font-size: .9em; }
-pre { background: var(--code); padding: 1rem; border-radius: 8px; overflow-x: auto; }
-nav, footer { color: var(--muted); font-size: .9rem; }
-nav { margin-bottom: 2.5rem; } nav a { margin-right: 1rem; }
-footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
-</style>
+<meta name="theme-color" content="#0a0a0b">
+<link rel="icon" href="${FAVICON}">
+<style>${STYLE}</style>
 </head>
 <body>
-<main>
-<nav><a href="/">AP</a><a href="/privacy">Privacy</a><a href="${REPO}">GitHub</a></nav>
+<main${wide ? ' class="wide"' : ""}>
+<header><a class="brand" href="/">${logo(32)}<span>AP</span></a><nav><a href="/privacy">Privacy</a><a href="${REPO}">GitHub</a></nav></header>
 ${body}
-<footer><a href="/privacy">Privacy policy</a> · <a href="${REPO}">Source</a> · <a href="${REPO}/blob/main/LICENSE">MIT license</a></footer>
+<footer><a href="/privacy">Privacy policy</a><a href="${REPO}">Source</a><a href="${REPO}/blob/main/LICENSE">MIT license</a></footer>
 </main>
 </body>
 </html>
@@ -44,25 +128,31 @@ ${body}
 export const LANDING_PAGE = page(
   "AP (AI Proxy)",
   "Give a private application a public HTTPS URL that AI clients can call.",
-  `<h1>AP (AI Proxy)</h1>
-<p class="lead">Give a private application a public HTTPS URL that AI clients can call.</p>
-<p>A private application connects <strong>outward</strong> to AP, and AP gives it a public HTTPS endpoint. An AI client, agent or service calls that endpoint like any web API, and AP hands each request to the private app and returns its response. The private app needs no inbound port, no VPN and no tunnel agent.</p>
-<p><strong>AP routes intelligence. It does not provide intelligence.</strong></p>
+  `<section class="hero">
+${logo(132, "AP logo")}
+<p class="kicker">AI Proxy / Public Rendezvous</p>
+<h1>Give a private application a public HTTPS URL.</h1>
+<p class="lead">A private app connects <strong>outward</strong> to AP, and AI clients call it like any web API. No inbound port, no VPN, no tunnel agent.</p>
+</section>
+<div class="scroll">${DIAGRAM}</div>
+<p>An AI client, agent or service calls the public endpoint. AP hands each request to the private app and returns its response. <strong>AP routes intelligence. It does not provide intelligence.</strong></p>
 <h2>Get started</h2>
-<ul>
-<li><a href="${REPO}/blob/main/docs/EXAMPLE.md">Put a tiny app online in five steps</a></li>
-<li><a href="${REPO}#readme">README and API overview</a></li>
-<li><a href="${REPO}/blob/main/docs/ACCOUNTS.md">Signing in with GitHub or Google to get an AP key</a></li>
-</ul>
+<div class="cards">
+<a href="${REPO}/blob/main/docs/EXAMPLE.md"><b>Example</b><span>Put a tiny app online in five steps.</span></a>
+<a href="${REPO}#readme"><b>README</b><span>The API overview and how channels work.</span></a>
+<a href="${REPO}/blob/main/docs/ACCOUNTS.md"><b>Accounts</b><span>Sign in with Google or GitHub to get an AP key.</span></a>
+</div>
 <h2>Signing in</h2>
 <p>An AP key proves who you are. You get one by signing in with a Google or GitHub account through the device flow, which asks for a short code and gives you a key once you approve it. See the <a href="/privacy">privacy policy</a> for what AP keeps.</p>
 <p class="muted">AP is open source. Source, issues and documentation are on <a href="${REPO}">GitHub</a>.</p>`,
+  true,
 );
 
 export const PRIVACY_PAGE = page(
   "AP Privacy Policy",
   "What AP collects when you sign in or use a channel, how long it is kept, and who it is shared with.",
-  `<h1>Privacy policy</h1>
+  `<div class="doc">
+<h1>Privacy policy</h1>
 <p class="muted">AP (AI Proxy) at apchannels.dev. Last updated ${PRIVACY_UPDATED}.</p>
 <p>This policy explains what information AP handles, why, and how long it is kept. AP is a small open-source service run by an individual maintainer, and it is built to collect as little as it can.</p>
 
@@ -115,5 +205,6 @@ export const PRIVACY_PAGE = page(
 <p>When this policy changes, the date at the top changes, and material changes are noted in the <a href="${REPO}/blob/main/CHANGELOG.md">changelog</a>.</p>
 
 <h2>Contact</h2>
-<p>Use <a href="${REPO}/issues">GitHub issues</a> for privacy questions and requests.</p>`,
+<p>Use <a href="${REPO}/issues">GitHub issues</a> for privacy questions and requests.</p>
+</div>`,
 );
