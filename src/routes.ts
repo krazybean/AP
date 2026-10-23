@@ -7,6 +7,7 @@ import { registerAccountRoutes } from "./account-routes.js";
 import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 import type { GitHubDeviceClient } from "./github.js";
+import type { GoogleDeviceClient } from "./google.js";
 import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
@@ -133,6 +134,7 @@ function parseExposure(body: unknown): ExposureConfig | null {
 export interface RouteOptions {
   auditSink?: AuditSink;
   github?: GitHubDeviceClient;
+  google?: GoogleDeviceClient;
 }
 
 export function registerRoutes(app: FastifyInstance, broker: Broker = createBroker(), options: RouteOptions = {}) {
@@ -163,6 +165,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   const accounts = registerAccountRoutes(app, {
     broker,
     github: options.github,
+    google: options.google,
     audit,
     securityMetrics,
     brokerUnavailable,

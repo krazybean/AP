@@ -143,9 +143,9 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 | --- | --- | --- |
 | `GET` | `/health` | AP and broker health |
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
-| `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub and get an AP key |
+| `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub (or Google, with `"provider":"google"`) and get an AP key |
 | `GET`, `DELETE` | `/keys`, `/keys/:keyId` | List or revoke your AP keys |
-| `GET`, `POST` | `/admin/accounts[/:githubId[/disable\|/enable]]` | Operator view of accounts and usage (requires `AP_ADMIN_TOKEN`) |
+| `GET`, `POST` | `/admin/accounts[/:id[/disable\|/enable]]` | Operator view of accounts and usage (requires `AP_ADMIN_TOKEN`) |
 | `POST` | `/channels` | Create a channel; optional `access` (bearer tokens, scopes) and `exposure` (isolated host) |
 | `GET` | `/channels/:channel/next` | Downstream waits for the next request |
 | `POST` | `/channels/:channel/responses/:requestId` | Downstream returns a response |
@@ -178,7 +178,7 @@ Current limits:
 
 - Channels expire after 15 minutes without activity; reconnecting apps create a new channel.
 - Bodies are JSON only and responses are not streamed.
-- Channel creation is anonymous by default, limited to 10 per source IP per hour. Operators can require a GitHub-backed AP key instead (`AP_REQUIRE_ACCOUNT=true`), which allows 10 live channels per account. `REQUIRE_LICENSE=true` only requires a non-empty `X-APP-License` header; license values are not validated yet.
+- Channel creation is anonymous by default, limited to 10 per source IP per hour. Operators can require an AP key from GitHub or Google sign-in instead (`AP_REQUIRE_ACCOUNT=true`), which allows 10 live channels per account. `REQUIRE_LICENSE=true` only requires a non-empty `X-APP-License` header; license values are not validated yet.
 - The APP schema and security model are not frozen.
 
 Use the hosted service for development and experiments, and don't assume production guarantees that aren't documented. The security model is described in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) and [docs/SECURITY-BASELINE.md](docs/SECURITY-BASELINE.md); operations, including broker selection and Redis outages, in [docs/OPERATIONS.md](docs/OPERATIONS.md).
