@@ -137,6 +137,29 @@ Delete one you lost or leaked, using its `keyId` from that list:
 curl -s -X DELETE https://apchannels.dev/keys/<keyId> -H "X-AP-Key: apk_..."
 ```
 
+## Delete your account
+
+You can remove your account and everything AP keeps about it, yourself, at any time:
+
+```bash
+curl -s -X DELETE https://apchannels.dev/account \
+  -H "X-AP-Key: apk_..." \
+  -H 'content-type: application/json' \
+  -d '{"confirm":"delete-my-account"}'
+```
+
+`204` means it is done. This removes your account record (your id and email or username), all your AP keys, the ownership records for your channels and services, and your usage counts. Your keys stop working immediately. It cannot be undone; signing in again later creates a new, empty account.
+
+| You get | It means |
+| --- | --- |
+| `204` | Deleted. |
+| `400 confirmation_required` | The body must be exactly `{"confirm":"delete-my-account"}`. Nothing was deleted. |
+| `401 account_required` / `account_key_invalid` | No key, or a key that is wrong, already deleted, or turned off. |
+
+If you lost your key, open an issue on the repository and ask for removal. The operator can delete the account (see below).
+
+Deleting does not touch log lines already written by AP's hosting provider, and AP logs one event recording that the account id was deleted. See the [privacy policy](https://apchannels.dev/privacy).
+
 ## If something goes wrong
 
 | You see | It means | Do this |
@@ -204,6 +227,7 @@ All admin calls need `Authorization: Bearer <AP_ADMIN_TOKEN>`. Without it they a
 | `GET /admin/accounts/<id>` | its keys (with last use), its live channels, and channels created per day for the last 8 days |
 | `POST /admin/accounts/<id>/disable` | turns the account off and deletes its keys; its apps stop at their next call |
 | `POST /admin/accounts/<id>/enable` | lets the person sign in again (they need a new key) |
+| `DELETE /admin/accounts/<id>` | removes the account and all its records, for someone who lost their key and asked to be deleted. `204` on success, `404` if there is no such account. |
 
 `/metrics` also counts sign-ins, keys created and revoked, and rejections by reason (`missing`, `invalid`, `not_owned`, `limit`, `disabled`).
-The audit log records `account.key_created`, `account.key_revoked`, `account.disabled`, `account.enabled` and `account.rejected`, with the account id but never the key.
+The audit log records `account.key_created`, `account.key_revoked`, `account.disabled`, `account.enabled`, `account.deleted` and `account.rejected`, with the account id but never the key.

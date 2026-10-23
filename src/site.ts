@@ -156,6 +156,15 @@ export const PRIVACY_PAGE = page(
 <p class="muted">AP (AI Proxy) at apchannels.dev. Last updated ${PRIVACY_UPDATED}.</p>
 <p>This policy explains what information AP handles, why, and how long it is kept. AP is a small open-source service run by an individual maintainer, and it is built to collect as little as it can.</p>
 
+<h2>In short</h2>
+<ul>
+<li><strong>Signing in is optional.</strong> If you never sign in, AP keeps no account or profile about you.</li>
+<li><strong>If you sign in</strong>, AP stores only your account id and email address (or GitHub username), hashes of your AP keys, and a few usage counts. It reads nothing else from your Google or GitHub account.</li>
+<li><strong>Channel traffic is not kept.</strong> Requests and responses are held only while they are delivered, for at most 15 minutes, and are never logged.</li>
+<li><strong>No tracking.</strong> No cookies, analytics or advertising, and your information is never sold or used to train models.</li>
+<li><strong>You can delete your account yourself, at any time</strong>, with one request. See <a href="#delete">Your choices</a>.</li>
+</ul>
+
 <h2>What AP collects</h2>
 <p><strong>If you sign in with Google.</strong> AP asks Google for the <code>openid</code> and <code>email</code> scopes only. It receives your Google account&rsquo;s stable id and your email address, and only if Google reports the email as verified. AP keeps that id as your account identifier and your email as the name shown for your account. AP does not read your name, photo, contacts, calendar, mail or anything else in your Google account, and it does not keep Google&rsquo;s access token after sign-in.</p>
 <p><strong>If you sign in with GitHub.</strong> AP receives your GitHub user id and username, and keeps them in the same way. It asks GitHub for no extra permissions.</p>
@@ -176,8 +185,8 @@ export const PRIVACY_PAGE = page(
 
 <h2>How long it is kept</h2>
 <ul>
-<li><strong>Account record</strong> (account id, email or username, when it was created): kept while your account exists, until you ask for it to be removed.</li>
-<li><strong>AP keys</strong> (hashes): kept until you revoke them or the account is disabled.</li>
+<li><strong>Account record</strong> (account id, email or username, when it was created): kept while your account exists, until you delete it.</li>
+<li><strong>AP keys</strong> (hashes): kept until you revoke them, delete your account, or an operator disables it.</li>
 <li><strong>Sign-in codes in progress:</strong> deleted when you finish or when the code expires, within 30 minutes.</li>
 <li><strong>Channel and request data:</strong> expires 15 minutes after a channel goes quiet.</li>
 <li><strong>Channel ownership records:</strong> 24 hours. <strong>Daily usage counts:</strong> 8 days.</li>
@@ -188,12 +197,15 @@ export const PRIVACY_PAGE = page(
 <h2>Who handles it</h2>
 <p>AP runs on infrastructure from service providers that process data on its behalf: Vercel hosts the service, and Upstash provides the Redis database that holds the records above. When you sign in, Google or GitHub receives the sign-in request under their own privacy policies. AP does not share your information with anyone else except where the law requires it.</p>
 
-<h2>Your choices</h2>
+<h2 id="delete">Your choices</h2>
 <ul>
-<li>See and delete your AP keys at any time with <code>GET /keys</code> and <code>DELETE /keys/&lt;keyId&gt;</code>. See <a href="${REPO}/blob/main/docs/ACCOUNTS.md">the accounts guide</a>.</li>
-<li>Ask for your account record to be removed, or ask what AP holds about you, by <a href="${REPO}/issues">opening an issue</a>. Don&rsquo;t include any keys or secrets in it. If you would rather not post publicly, say so in the issue and the maintainer will arrange a private way to continue.</li>
-<li>You can remove AP&rsquo;s access to your Google account any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>, or to your GitHub account in GitHub&rsquo;s Applications settings.</li>
+<li><strong>Delete your account.</strong> Send <code>DELETE /account</code> with your AP key and the body <code>{"confirm":"delete-my-account"}</code>. AP then removes your account record, all your AP keys, your channel and service ownership records and your usage counts, and your keys stop working at once. See <a href="${REPO}/blob/main/docs/ACCOUNTS.md#delete-your-account">the accounts guide</a> for a ready-to-run command. Signing in again later starts a new, empty account.</li>
+<li><strong>Revoke a single key</strong> with <code>DELETE /keys/&lt;keyId&gt;</code>, or list your keys with <code>GET /keys</code>.</li>
+<li><strong>Lost your key?</strong> <a href="${REPO}/issues">Open an issue</a> asking for removal and the operator can delete the account for you. Don&rsquo;t include any keys or secrets. If you would rather not post publicly, say so in the issue and the maintainer will arrange a private way to continue.</li>
+<li><strong>Ask what AP holds</strong> about you the same way.</li>
+<li>You can remove AP&rsquo;s access to your Google account at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>, or to your GitHub account in GitHub&rsquo;s Applications settings.</li>
 </ul>
+<p><strong>What deleting does not remove.</strong> Log lines already written (see Logs above) are kept by AP&rsquo;s hosting provider under its own retention, and AP writes one log event recording that an account id was deleted. Channel data that is still in flight expires on its own within 15 minutes.</p>
 
 <h2>Security</h2>
 <p>Keys and secrets are stored only as hashes, traffic uses HTTPS, and access to account data is limited to the operator. To report a vulnerability, follow <a href="${REPO}/blob/main/SECURITY.md">SECURITY.md</a>. No service can promise perfect security, and if a breach affected you, AP will tell affected users.</p>

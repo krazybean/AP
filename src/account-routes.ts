@@ -12,6 +12,8 @@ const DEVICE_ID = new RegExp(`^${DEVICE_ID_PREFIX}[A-Za-z0-9_-]{32}$`);
 // GitHub accounts are plain numeric ids; Google accounts are `google:` plus the numeric `sub`.
 const GITHUB_ID = /^(?:\d{1,20}|google:\d{1,40})$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// DELETE /account must send {"confirm":"delete-my-account"}.
+const DELETE_CONFIRMATION = "delete-my-account";
 const KEY_LABEL = /^[\x20-\x7e]{1,64}$/;
 
 // With AP_REQUIRE_ACCOUNT=true every management and downstream call needs an account key.
@@ -238,6 +240,22 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     }
   });
 
+  // Self-service removal: the caller's own key proves who they are, and the body must say so on purpose
+  // because nothing can be undone. Their keys stop working immediately; signing in again starts a fresh account.
+  app.delete<{ Body: { confirm?: unknown } | undefined }>("/account", async (request, reply) => {
+    try {
+      const account = await gate.caller(request, reply, true);
+      if (!account) return;
+      if (request.body?.confirm !== DELETE_CONFIRMATION) return reply.code(400).send({ error: "confirmation_required" });
+      if (!(await broker.accounts.deleteAccount(account.githubId))) return reply.code(404).send({ error: "account_not_found" });
+      audit(request, { event: "account.deleted", githubId: account.githubId });
+      return reply.code(204).send();
+    } catch (error) {
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
+  });
+
   // Operator view, hidden (404) unless AP_ADMIN_TOKEN is set and sent as a bearer token.
   app.get("/admin/accounts", async (request, reply) => {
     if (!deps.adminAuthorized(request.headers.authorization)) return reply.code(404).send({ error: "not_found" });
@@ -261,6 +279,20 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
         account: { ...usage.account, createdAt: new Date(usage.account.createdAt).toISOString() },
         keys: usage.keys.map((key) => ({ ...key, createdAt: new Date(key.createdAt).toISOString(), ...(key.lastUsedAt ? { lastUsedAt: new Date(key.lastUsedAt).toISOString() } : {}) })),
       };
+    } catch (error) {
+      if (brokerUnavailable(error, reply, request)) return;
+      throw error;
+    }
+  });
+
+  // For someone who lost their key and asked the operator to remove their data.
+  app.delete<{ Params: { githubId: string } }>("/admin/accounts/:githubId", async (request, reply) => {
+    if (!deps.adminAuthorized(request.headers.authorization)) return reply.code(404).send({ error: "not_found" });
+    if (!GITHUB_ID.test(request.params.githubId)) return reply.code(404).send({ error: "account_not_found" });
+    try {
+      if (!(await broker.accounts.deleteAccount(request.params.githubId))) return reply.code(404).send({ error: "account_not_found" });
+      audit(request, { event: "account.deleted", githubId: request.params.githubId });
+      return reply.code(204).send();
     } catch (error) {
       if (brokerUnavailable(error, reply, request)) return;
       throw error;

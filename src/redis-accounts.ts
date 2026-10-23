@@ -140,6 +140,7 @@ export class RedisAccountStore implements AccountStore {
 
   async recordService(githubId: string, name: string) {
     await this.command(() => this.redis.set(this.key("service-owner", name), githubId));
+    await this.command(() => this.redis.sadd(this.key("account-services", githubId), name));
   }
 
   async serviceOwner(name: string) {
@@ -184,6 +185,31 @@ export class RedisAccountStore implements AccountStore {
   async enableAccount(githubId: string) {
     if (!(await this.account(githubId))) return false;
     await this.command(() => this.redis.hset(this.key("account", githubId), { disabled: "0" }));
+    return true;
+  }
+
+  async deleteAccount(githubId: string) {
+    if (!(await this.account(githubId))) return false;
+    const keys = hashReply(await this.command(() => this.redis.hgetall(this.key("account-keys", githubId))) as Record<string, string> | string[] | null) ?? {};
+    const channels = await this.command(() => this.redis.smembers<string[]>(this.key("account-channels", githubId)));
+    const services = await this.command(() => this.redis.smembers<string[]>(this.key("account-services", githubId)));
+    const owned: string[] = [];
+    for (const name of services) {
+      if (await this.serviceOwner(String(name)) === githubId) owned.push(this.key("service-owner", String(name)));
+    }
+    const doomed = [
+      ...Object.values(keys).map((digest) => this.key("apikey", digest)),
+      ...channels.map((channel) => this.key("channel-owner", String(channel))),
+      ...owned,
+      ...recentDays().map((day) => this.key("usage", githubId, day)),
+      this.key("account-keys", githubId),
+      this.key("account-channels", githubId),
+      this.key("account-services", githubId),
+    ];
+    await this.command(() => this.redis.del(...doomed));
+    // The account record goes last so a failed delete can simply be retried.
+    await this.command(() => this.redis.srem(this.key("accounts"), githubId));
+    await this.command(() => this.redis.del(this.key("account", githubId)));
     return true;
   }
 }
