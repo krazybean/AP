@@ -26,6 +26,10 @@ In production (`NODE_ENV=production`), `/metrics` returns `404` unless `AP_METRI
 
 GitHub sign-in and AP keys are off until `AP_GITHUB_CLIENT_ID` is set, and keys stay optional until `AP_REQUIRE_ACCOUNT=true`. Setup, the admin endpoints (`AP_ADMIN_TOKEN`) and the per-account live-channel limit (`AP_ACCOUNT_CHANNEL_LIMIT`, default 10) are in [ACCOUNTS.md](ACCOUNTS.md). Keys are stored as SHA-256 digests in Redis under `ap:apikey:*`; disabling an account deletes its keys. An invalid `AP_ACCOUNT_CHANNEL_LIMIT` stops startup.
 
+## Landing page hero
+
+The home page opens with an interactive 3D demo (also at `/demo`). If a deployment shows a problem with it, set `AP_HERO=video` (a recorded video of the same animation) or `AP_HERO=static` (the original mark and flow diagram, nothing animated) and redeploy. `/?hero=video` and `/?hero=static` show those versions on demand, whatever the variable says. Every failure of the demo or the video also falls back by itself. Details, the CSP the demo page needs and how it is built are in [HERO.md](HERO.md).
+
 ## Security telemetry and auditability
 
 `/metrics` includes a `security` object with bounded dimensions only: authentication failure reasons (`missing`, `invalid`, `expired`, `revoked`), scope denial reason, capacity type, broker error type, invalid-host reason, lifecycle counters, path/isolated-host plus public/bearer channel-creation modes, timeout count, legacy isolated-path blocks, and audit-emission failures. It never uses channel ID, credential ID, hostname, request ID, path, IP address, user agent, or arbitrary application input as a metric label.
