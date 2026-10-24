@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- The home page now opens with a looping hero video of AP's flow: a request waiting in AP's queue, the private application polling outward, and the queued request delivered as the answer to that poll. AP serves the video and its still frame itself (`/hero-<hash>.mp4`, `/hero-<hash>.jpg`, with Range support so Safari plays it), the landing page's CSP gains `media-src 'self'` and `img-src 'self'`, and there are still no scripts.
+- The hero has layered fallbacks: if the video cannot play, the still frame from the same render shows; if that cannot load, the flow diagram shows; people who ask for reduced motion get the still. Set `AP_HERO_VIDEO=off` to serve the original static hero to everyone, or open `/?hero=static` to see it. See `docs/HERO.md`.
+
 ## [1.2.0] - 2026-10-23
 
 - Accounts: `DELETE /account` (with `{"confirm":"delete-my-account"}` and your `X-AP-Key`) deletes your account and everything AP keeps about it: the account record, all keys, channel and service ownership and usage counts. Operators get `DELETE /admin/accounts/:id` for people who lost their key. New audit event `account.deleted`. Services created before this release have no ownership index, so their owner record is not removed by a delete. The privacy policy, README and `docs/ACCOUNTS.md` describe it.

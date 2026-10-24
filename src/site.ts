@@ -1,5 +1,8 @@
 // Static pages served on AP's own address: a landing page and the privacy policy.
-// Inline CSS only, no scripts, no external requests, so the page CSP can stay `default-src 'none'`.
+// Inline CSS only, no scripts, no external requests. The landing page's hero video is the one thing it loads,
+// and only from AP itself (`media-src 'self'`), so the CSP stays `default-src 'none'` plus those two directives.
+
+import { HERO_POSTER_PATH, HERO_VIDEO_PATH } from "./hero-media.js";
 
 const REPO = "https://github.com/krazybean/AP";
 export const PRIVACY_UPDATED = "October 23, 2026";
@@ -99,6 +102,14 @@ code { background: var(--code); border: 1px solid var(--rule); padding: .05rem .
 .doc { background: rgba(16,16,18,.7); border: 1px solid var(--rule); border-radius: 6px; padding: 1.5rem 1.5rem 2rem; }
 .doc h1 { margin-top: 0; }
 footer { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px dashed var(--rule); display: flex; gap: 1.25rem; flex-wrap: wrap; }
+.stage { position: relative; margin: 1.75rem 0 1.25rem; aspect-ratio: 16 / 9; overflow: hidden; background: #050506; border: 1px dashed #3a3a40; border-radius: 4px; }
+.stage > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage-static { display: grid; place-items: center; padding: 1rem; }
+.stage .diagram { margin: 0; min-width: 0; max-width: 100%; }
+.stage-still { background: url("${HERO_POSTER_PATH}") center / cover no-repeat; }
+.stage-video { object-fit: cover; background: transparent; }
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .stage-video { display: none; } }
 @media (max-width: 36rem) { header nav { gap: .9rem; } .doc { padding: 1.1rem 1rem 1.5rem; } .diagram { min-width: 38rem; } .scroll { overflow-x: auto; } }
 `;
 
@@ -125,17 +136,12 @@ ${body}
 `;
 }
 
-export const LANDING_PAGE = page(
-  "AP (AI Proxy)",
-  "Give a private application a public HTTPS URL that AI clients can call.",
-  `<section class="hero">
-${logo(132, "AP logo")}
-<p class="kicker">AI Proxy / Public Rendezvous</p>
-<h1>Give a private application a public HTTPS URL.</h1>
-<p class="lead">A private app connects <strong>outward</strong> to AP, and AI clients call it like any web API. No inbound port, no VPN, no tunnel agent.</p>
-</section>
-<div class="scroll">${DIAGRAM}</div>
-<p>An AI client, agent or service calls the public endpoint. AP hands each request to the private app and returns its response. <strong>AP routes intelligence. It does not provide intelligence.</strong></p>
+const LANDING_TITLE = "AP (AI Proxy)";
+const LANDING_DESCRIPTION = "Give a private application a public HTTPS URL that AI clients can call.";
+const HEADLINE = "Give a private application a public HTTPS URL.";
+const STAGE_SUMMARY = "AP in motion: an AI client's request reaches AP and waits in its queue. AP cannot reach the private application, so the application polls outward to AP, and the waiting request is delivered as the answer to that poll. The response returns through the same channel.";
+
+const LANDING_REST = `<p>An AI client, agent or service calls the public endpoint. AP hands each request to the private app and returns its response. <strong>AP routes intelligence. It does not provide intelligence.</strong></p>
 <h2>Get started</h2>
 <div class="cards">
 <a href="${REPO}/blob/main/docs/EXAMPLE.md"><b>Example</b><span>Put a tiny app online in five steps.</span></a>
@@ -144,9 +150,42 @@ ${logo(132, "AP logo")}
 </div>
 <h2>Signing in</h2>
 <p>An AP key proves who you are. You get one by signing in with a Google or GitHub account through the device flow, which asks for a short code and gives you a key once you approve it. See the <a href="/privacy">privacy policy</a> for what AP keeps.</p>
-<p class="muted">AP is open source. Source, issues and documentation are on <a href="${REPO}">GitHub</a>.</p>`,
-  true,
-);
+<p class="muted">AP is open source. Source, issues and documentation are on <a href="${REPO}">GitHub</a>.</p>`;
+
+const LEAD = `<p class="lead">A private app connects <strong>outward</strong> to AP, and AI clients call it like any web API. No inbound port, no VPN, no tunnel agent.</p>`;
+
+// The hero is a stack of layers, so each failure falls back to the next one with no scripts involved:
+//   1. the video, when the browser can decode it and the file arrives (muted and looping; no `controls`, because
+//      browsers paint an opaque control panel over a video that failed, which would hide the layers below it)
+//   2. the still frame from the same render, painted underneath, if the video cannot play
+//   3. the static diagram underneath that, if the still cannot load either
+// Browsers that do not understand <video> at all, and people who ask for reduced motion, land on layer 2 or 3.
+const VIDEO_HERO = `<section class="hero">
+<p class="kicker">AI Proxy / Public Rendezvous</p>
+<h1>${HEADLINE}</h1>
+${LEAD}
+</section>
+<figure class="stage" aria-label="${STAGE_SUMMARY}">
+<div class="stage-static">${DIAGRAM}</div>
+<div class="stage-still"></div>
+<video class="stage-video" autoplay muted loop playsinline preload="metadata" disablepictureinpicture aria-label="${STAGE_SUMMARY}"><source src="${HERO_VIDEO_PATH}" type="video/mp4"></video>
+<figcaption class="sr">${STAGE_SUMMARY}</figcaption>
+</figure>
+${LANDING_REST}`;
+
+// The original hero: mark, headline and the flow diagram. Served at /?hero=static, and for every visitor when
+// the AP_HERO_VIDEO environment variable is "off".
+const STATIC_HERO = `<section class="hero">
+${logo(132, "AP logo")}
+<p class="kicker">AI Proxy / Public Rendezvous</p>
+<h1>${HEADLINE}</h1>
+${LEAD}
+</section>
+<div class="scroll">${DIAGRAM}</div>
+${LANDING_REST}`;
+
+export const LANDING_PAGE = page(LANDING_TITLE, LANDING_DESCRIPTION, VIDEO_HERO, true);
+export const LANDING_PAGE_STATIC = page(LANDING_TITLE, LANDING_DESCRIPTION, STATIC_HERO, true);
 
 export const PRIVACY_PAGE = page(
   "AP Privacy Policy",

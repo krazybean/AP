@@ -11,7 +11,8 @@ import type { GoogleDeviceClient } from "./google.js";
 import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
-import { LANDING_PAGE, PRIVACY_PAGE } from "./site.js";
+import { HERO_POSTER, HERO_POSTER_PATH, HERO_VIDEO, HERO_VIDEO_PATH } from "./hero-media.js";
+import { LANDING_PAGE, LANDING_PAGE_STATIC, PRIVACY_PAGE } from "./site.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
 import { validateServiceName } from "./services.js";
 
@@ -221,14 +222,39 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
   }
 
   // AP's own pages. On isolated channel hosts the preHandler hook has already proxied the request.
-  const sitePage = (html: string) => async (_request: unknown, reply: any) => reply
+  const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  // The landing page also shows the hero render, which AP serves itself: the still frame as a background image and the video.
+  const LANDING_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  const sitePage = (html: (request: any) => string, csp = PAGE_CSP) => async (request: any, reply: any) => reply
     .header("content-type", "text/html; charset=utf-8")
-    .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+    .header("content-security-policy", csp)
     .header("x-content-type-options", "nosniff")
     .header("cache-control", "public, max-age=300")
-    .send(html);
-  app.get("/", sitePage(LANDING_PAGE));
-  app.get("/privacy", sitePage(PRIVACY_PAGE));
+    .send(html(request));
+  // Backout for the hero video: AP_HERO_VIDEO=off serves the static hero to everyone, and /?hero=static shows it on demand.
+  const heroVideoEnabled = () => !["off", "false", "0"].includes((process.env.AP_HERO_VIDEO ?? "").trim().toLowerCase());
+  app.get("/", sitePage((request) => (heroVideoEnabled() && request.query?.hero !== "static" ? LANDING_PAGE : LANDING_PAGE_STATIC), LANDING_CSP));
+  app.get("/privacy", sitePage(() => PRIVACY_PAGE));
+
+  // The hero media is embedded in the build (src/hero-media.ts). Names carry a content hash, so they cache forever.
+  // Range requests are supported because Safari will not play a video without them.
+  const heroMedia = (path: string, type: string, body: Buffer) => app.get(path, async (request, reply) => {
+    reply
+      .header("content-type", type)
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "default-src 'none'; sandbox")
+      .header("cache-control", "public, max-age=31536000, immutable")
+      .header("accept-ranges", "bytes");
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(request.headers.range ?? "").trim());
+    if (!range || (range[1] === "" && range[2] === "")) return reply.send(body);
+    const size = body.length;
+    const start = range[1] === "" ? Math.max(0, size - Number(range[2])) : Number(range[1]);
+    const end = range[1] === "" || range[2] === "" ? size - 1 : Math.min(Number(range[2]), size - 1);
+    if (start >= size || start > end) return reply.code(416).header("content-range", `bytes */${size}`).send();
+    return reply.code(206).header("content-range", `bytes ${start}-${end}/${size}`).send(body.subarray(start, end + 1));
+  });
+  heroMedia(HERO_VIDEO_PATH, "video/mp4", HERO_VIDEO);
+  heroMedia(HERO_POSTER_PATH, "image/jpeg", HERO_POSTER);
 
   app.get("/health", async (request, reply) => {
     if (await brokerHealthy()) {
