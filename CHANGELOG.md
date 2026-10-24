@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Docs: the README opens with the hero diagram (`docs/assets/ap-hero.png`) in place of the ASCII sketch.
+
 ## [1.2.0] - 2026-10-23
 
 - Accounts: `DELETE /account` (with `{"confirm":"delete-my-account"}` and your `X-AP-Key`) deletes your account and everything AP keeps about it: the account record, all keys, channel and service ownership and usage counts. Operators get `DELETE /admin/accounts/:id` for people who lost their key. New audit event `account.deleted`. Services created before this release have no ownership index, so their owner record is not removed by a delete. The privacy policy, README and `docs/ACCOUNTS.md` describe it.

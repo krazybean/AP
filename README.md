@@ -10,24 +10,9 @@ A private application connects **outward** to AP, and AP gives it a public HTTPS
 
 The private app needs no inbound port, no VPN and no tunnel agent: it talks to AP over ordinary outbound HTTPS.
 
-```text
-AI client / agent / service
-            │
-            │ HTTPS
-            ▼
-    ┌───────────────┐
-    │      AP       │
-    │  public edge  │
-    └───────┬───────┘
-            │
-            │ outbound-only uplink
-            ▼
-    ┌───────────────┐
-    │  private app  │
-    │ laptop / LAN  │
-    │ lab / server  │
-    └───────────────┘
-```
+<p align="center">
+  <img src="docs/assets/ap-hero.png" alt="AI clients call AP's public /c/{channel} URL. AP holds the channel state and request queue. The private application polls AP outbound, receives queued requests and returns its responses through the same channel.">
+</p>
 
 ---
 
