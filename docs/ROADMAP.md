@@ -78,11 +78,11 @@ AP follows [semantic versioning](https://semver.org/). `1.0.0` is the first stab
 
 **How versions move:**
 
-- **Patch** (`1.0.x`): bug fixes and security fixes that change no documented behavior.
-- **Minor** (`1.x.0`): additive changes. New routes, optional request fields, new env vars that default to off, new sign-in providers, and new error codes for new conditions. Clients must tolerate unknown fields and unknown error codes.
+- **Patch** (`1.2.x`, where AP is now): the normal release. Bug fixes, security fixes and small additive changes that break nothing, such as a new route, an optional request field, an env var that defaults to off, a new sign-in provider or a new error code for a new condition. Clients must tolerate unknown fields and unknown error codes, which is what makes additive patches safe.
+- **Minor** (`1.x.0`): a larger capability the maintainer wants to announce, such as the discovery work planned for 1.x above. Not needed for ordinary additions.
 - **Major** (`2.0.0`, `3.0.0`): removing or changing documented behavior. This is also where the routing (2.0) and interoperability (3.0) goals above land.
-- A documented behavior is deprecated for at least one minor release, and noted in the changelog, before a major release removes it.
-- Security fixes may tighten behavior in a patch or minor release when the old behavior was unsafe. These are called out in the changelog.
+- A documented behavior is deprecated for at least one release, and noted in the changelog, before a major release removes it.
+- Security fixes may tighten behavior in any release when the old behavior was unsafe. These are called out in the changelog.
 
 **Cutting a release:**
 
