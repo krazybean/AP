@@ -69,64 +69,130 @@ test("channel hostnames never serve AP's pages", async () => {
   });
 });
 
-test("the landing hero is a video stacked over its own fallbacks", async () => {
+const heroPage = async (app: Awaited<ReturnType<typeof buildTestApp>>, query = "", headers: Record<string, string> = {}) =>
+  app.inject({ method: "GET", url: `/${query}`, headers });
+
+test("the default hero is the live demo, in an <object> over the recorded still and the diagram", async () => {
   const app = buildTestApp(testBroker());
-  const response = await app.inject({ method: "GET", url: "/" });
+  const response = await heroPage(app);
   const html = response.body;
-  const video = html.match(/<video[^>]*>.*?<\/video>/s)?.[0] ?? "";
-  assert.match(video, /\bautoplay\b/);
-  assert.match(video, /\bmuted\b/);
-  assert.match(video, /\bloop\b/);
-  assert.match(video, /\bplaysinline\b/);
-  assert.ok(!/\bcontrols\b/.test(video), "controls would paint over the fallback layers when the video fails");
-  assert.match(video, /<source src="\/hero-[0-9a-f]{10}\.mp4" type="video\/mp4">/);
-  // The layers under the video, in painting order: the still frame, over the static diagram.
+  assert.match(html, /<object class="stage-demo" type="text\/html" data="\/demo"[^>]*><\/object>/);
+  // Painting order, bottom to top: the diagram, the still frame, the demo. A failed <object> is empty, so the layers show.
   assert.ok(html.indexOf('class="stage-static"') < html.indexOf('class="stage-still"'));
-  assert.ok(html.indexOf('class="stage-still"') < html.indexOf("<video"));
+  assert.ok(html.indexOf('class="stage-still"') < html.indexOf("<object"));
   assert.match(html, /<svg class="diagram"/);
   assert.match(html, /\.stage-still \{[^}]*url\("\/hero-[0-9a-f]{10}\.jpg"\)/);
-  assert.match(html, /prefers-reduced-motion: reduce\) \{ \.stage-video \{ display: none; \}/);
-  // Only AP's own origin may supply media; nothing else loosens.
+  assert.ok(!/<video/i.test(html), "the live hero downloads no video; the demo page loads it only if it must");
+  assert.match(html, /href="\/\?hero=video"/);
+  assert.match(html, /href="\/\?hero=static"/);
   const csp = response.headers["content-security-policy"] as string;
-  assert.match(csp, /default-src 'none'/);
-  assert.match(csp, /media-src 'self'/);
-  assert.match(csp, /img-src data: 'self'/);
-  assert.ok(!/script-src|connect-src|frame-src/.test(csp));
+  for (const part of ["default-src 'none'", "media-src 'self'", "img-src data: 'self'", "object-src 'self'", "frame-src 'self'", "frame-ancestors 'none'"]) assert.ok(csp.includes(part), part);
+  assert.ok(!/script-src|connect-src/.test(csp), "the landing page itself still has no scripts");
   assert.ok(!/<script/i.test(html));
   await app.close();
 });
 
-test("the static hero is the backout: /?hero=static and AP_HERO_VIDEO=off drop the video", async () => {
+test("the video hero is the first backout: a video over the still, over the diagram", async () => {
   const app = buildTestApp(testBroker());
-  const bodies = [(await app.inject({ method: "GET", url: "/?hero=static" })).body];
-  const previous = process.env.AP_HERO_VIDEO;
+  const html = (await heroPage(app, "?hero=video")).body;
+  const video = html.match(/<video[^>]*>.*?<\/video>/s)?.[0] ?? "";
+  for (const attribute of ["autoplay", "muted", "loop", "playsinline"]) assert.match(video, new RegExp(`\\b${attribute}\\b`));
+  assert.ok(!/\bcontrols\b/.test(video), "controls would paint over the fallback layers when the video fails");
+  assert.match(video, /<source src="\/hero-[0-9a-f]{10}\.mp4" type="video\/mp4">/);
+  assert.ok(html.indexOf('class="stage-static"') < html.indexOf('class="stage-still"'));
+  assert.ok(html.indexOf('class="stage-still"') < html.indexOf("<video"));
+  assert.ok(!/<object/i.test(html));
+  assert.match(html, /prefers-reduced-motion: reduce\) \{ \.stage-video \{ display: none; \}/);
+  await app.close();
+});
+
+test("the static hero is the full backout: ?hero=static and AP_HERO=static drop the demo and the video", async () => {
+  const app = buildTestApp(testBroker());
+  const bodies = [(await heroPage(app, "?hero=static")).body];
+  const previous = process.env.AP_HERO;
   try {
-    for (const value of ["off", "OFF", "false", "0"]) {
-      process.env.AP_HERO_VIDEO = value;
-      bodies.push((await app.inject({ method: "GET", url: "/" })).body);
-    }
+    process.env.AP_HERO = "static";
+    bodies.push((await heroPage(app)).body);
+    process.env.AP_HERO = " STATIC ";
+    bodies.push((await heroPage(app)).body);
     for (const html of bodies) {
-      assert.ok(!/<video/i.test(html), "no video element");
-      assert.ok(!/<source/i.test(html), "no media source");
+      assert.ok(!/<video|<object|<source/i.test(html), "no demo and no video in the markup");
       assert.ok(html.includes("<h1>Give a private application a public HTTPS URL.</h1>"));
       assert.match(html, /<svg class="mark"[^>]*width="132"/, "the original mark");
       assert.match(html, /<svg class="diagram"/);
     }
-    process.env.AP_HERO_VIDEO = "on";
-    assert.match((await app.inject({ method: "GET", url: "/" })).body, /<video/);
-    // The switch is for the home page: the video stays on a plain request once the variable is gone.
-    delete process.env.AP_HERO_VIDEO;
-    assert.match((await app.inject({ method: "GET", url: "/" })).body, /<video/);
+    // The environment picks the default; a query still overrides it, and unknown values mean the live hero.
+    assert.match((await heroPage(app, "?hero=video")).body, /<video/);
+    assert.match((await heroPage(app, "?hero=live")).body, /<object/);
+    assert.match((await heroPage(app, "?hero=bogus")).body, /<h1>/);
+    process.env.AP_HERO = "video";
+    assert.match((await heroPage(app)).body, /<video/);
+    process.env.AP_HERO = "nonsense";
+    assert.match((await heroPage(app)).body, /<object/);
+    delete process.env.AP_HERO;
+    assert.match((await heroPage(app)).body, /<object/);
   } finally {
-    if (previous === undefined) delete process.env.AP_HERO_VIDEO;
-    else process.env.AP_HERO_VIDEO = previous;
+    if (previous === undefined) delete process.env.AP_HERO;
+    else process.env.AP_HERO = previous;
+  }
+  await app.close();
+});
+
+test("the demo page is the only page with a script, and only AP's own", async () => {
+  const app = buildTestApp(testBroker());
+  const response = await app.inject({ method: "GET", url: "/demo" });
+  assert.equal(response.statusCode, 200);
+  assert.match(String(response.headers["content-type"]), /^text\/html; charset=utf-8/);
+  const csp = response.headers["content-security-policy"] as string;
+  assert.match(csp, /default-src 'none'/);
+  assert.match(csp, /script-src 'self' blob:/);
+  assert.match(csp, /frame-ancestors 'self'/, "the landing page may frame it; no other origin");
+  assert.ok(!/https?:/.test(csp), "no other origin is allowed anything");
+  assert.equal(response.headers["x-content-type-options"], "nosniff");
+  const html = response.body;
+  const scripts = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(scripts.length, 1);
+  assert.match(scripts[0], /^\/demo-assets\/index-[A-Za-z0-9_-]{8}\.js$/);
+  assert.ok(!/<script(?![^>]*\bsrc=)/i.test(html), "no inline script");
+  assert.ok(!/(?:src|href)="https?:/i.test(html), "no external resources");
+  // The page learns where the hero media is from the server, because the files carry content hashes in their names.
+  assert.match(html, /<meta name="ap-hero-video" content="\/hero-[0-9a-f]{10}\.mp4">/);
+  assert.match(html, /<meta name="ap-hero-poster" content="\/hero-[0-9a-f]{10}\.jpg">/);
+  await app.close();
+});
+
+test("the demo's files are served gzipped to browsers that accept it and decoded to those that do not", async () => {
+  const app = buildTestApp(testBroker());
+  const html = (await app.inject({ method: "GET", url: "/demo" })).body;
+  const script = html.match(/src="(\/demo-assets\/[^"]+\.js)"/)![1];
+  const style = html.match(/href="(\/demo-assets\/[^"]+\.css)"/)![1];
+
+  const gzipped = await app.inject({ method: "GET", url: script, headers: { "accept-encoding": "gzip, deflate, br" } });
+  assert.equal(gzipped.statusCode, 200);
+  assert.equal(gzipped.headers["content-encoding"], "gzip");
+  assert.match(String(gzipped.headers["content-type"]), /^text\/javascript/);
+  assert.match(String(gzipped.headers["cache-control"]), /immutable/);
+  assert.equal(gzipped.headers.vary, "accept-encoding");
+
+  const plain = await app.inject({ method: "GET", url: script, headers: { "accept-encoding": "identity" } });
+  assert.equal(plain.statusCode, 200);
+  assert.equal(plain.headers["content-encoding"], undefined);
+  assert.ok(plain.rawPayload.length > gzipped.rawPayload.length * 2, "decoded is larger than gzipped");
+  assert.ok(plain.body.includes("three") || plain.rawPayload.length > 100_000, "it is the real bundle");
+
+  assert.match(String((await app.inject({ method: "GET", url: style, headers: { "accept-encoding": "gzip" } })).headers["content-type"]), /^text\/css/);
+  const font = html.match(/\/demo-assets\/[^"']+\.woff2/)?.[0];
+  if (font) assert.equal((await app.inject({ method: "GET", url: font })).headers["content-type"], "font/woff2");
+
+  for (const missing of ["/demo-assets/nope.js", "/demo-assets/index.html", "/demo-assets/__proto__", "/demo-assets/constructor"]) {
+    assert.equal((await app.inject({ method: "GET", url: missing })).statusCode, 404, missing);
   }
   await app.close();
 });
 
 test("the hero media is served with Range support so Safari can play it", async () => {
   const app = buildTestApp(testBroker());
-  const html = (await app.inject({ method: "GET", url: "/" })).body;
+  const html = (await heroPage(app, "?hero=video")).body;
   const videoPath = html.match(/<source src="([^"]+)"/)![1];
   const posterPath = html.match(/url\("(\/hero-[0-9a-f]{10}\.jpg)"\)/)![1];
 
@@ -178,15 +244,20 @@ test("the hero media is served with Range support so Safari can play it", async 
   await app.close();
 });
 
-test("channel hostnames never serve the hero media either", async () => {
+test("channel hostnames never serve the demo or the hero media either", async () => {
   await withBaseDomain("apchannels.test", async () => {
     const app = buildTestApp(testBroker());
-    const html = (await app.inject({ method: "GET", url: "/", headers: { host: "apchannels.test" } })).body;
+    const own = { host: "apchannels.test" };
+    const html = (await heroPage(app, "?hero=video", own)).body;
     const videoPath = html.match(/<source src="([^"]+)"/)![1];
-    assert.equal((await app.inject({ method: "GET", url: videoPath, headers: { host: "apchannels.test" } })).statusCode, 200);
-    const response = await app.inject({ method: "GET", url: videoPath, headers: { host: `${channel}.apchannels.test` } });
-    assert.equal(response.statusCode, 404);
-    assert.deepEqual(response.json(), { error: "not_found" });
+    const demo = await app.inject({ method: "GET", url: "/demo", headers: own });
+    const script = demo.body.match(/src="(\/demo-assets\/[^"]+\.js)"/)![1];
+    for (const url of [videoPath, "/demo", script]) {
+      assert.equal((await app.inject({ method: "GET", url, headers: own })).statusCode, 200, `${url} on AP's own host`);
+      const response = await app.inject({ method: "GET", url, headers: { host: `${channel}.apchannels.test` } });
+      assert.equal(response.statusCode, 404, `${url} on a channel host`);
+      assert.deepEqual(response.json(), { error: "not_found" });
+    }
     await app.close();
   });
 });

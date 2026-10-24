@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { isIP } from "node:net";
+import { gunzipSync } from "node:zlib";
 
 import { registerAccountRoutes } from "./account-routes.js";
 import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
@@ -12,7 +13,8 @@ import { defaultExposureMode } from "./http-config.js";
 import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateScopes } from "./client-scopes.js";
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
 import { HERO_POSTER, HERO_POSTER_PATH, HERO_VIDEO, HERO_VIDEO_PATH } from "./hero-media.js";
-import { LANDING_PAGE, LANDING_PAGE_STATIC, PRIVACY_PAGE } from "./site.js";
+import { DEMO_FILES, DEMO_HTML } from "./demo-assets.js";
+import { LANDING_PAGES, PRIVACY_PAGE, type HeroVariant } from "./site.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
 import { validateServiceName } from "./services.js";
 
@@ -223,18 +225,44 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
 
   // AP's own pages. On isolated channel hosts the preHandler hook has already proxied the request.
   const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-  // The landing page also shows the hero render, which AP serves itself: the still frame as a background image and the video.
-  const LANDING_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  // The landing page shows AP's own media (the still frame as a background image, the video) and the demo (an <object>).
+  const LANDING_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data: 'self'; media-src 'self'; object-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  // The demo is a separate page with the only script AP serves. `blob:` is for the text renderer's worker, which it builds from its own code. It is the one page that may be framed, and only by AP itself.
+  const DEMO_CSP = "default-src 'none'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; connect-src 'self' data: blob:; worker-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
   const sitePage = (html: (request: any) => string, csp = PAGE_CSP) => async (request: any, reply: any) => reply
     .header("content-type", "text/html; charset=utf-8")
     .header("content-security-policy", csp)
     .header("x-content-type-options", "nosniff")
     .header("cache-control", "public, max-age=300")
     .send(html(request));
-  // Backout for the hero video: AP_HERO_VIDEO=off serves the static hero to everyone, and /?hero=static shows it on demand.
-  const heroVideoEnabled = () => !["off", "false", "0"].includes((process.env.AP_HERO_VIDEO ?? "").trim().toLowerCase());
-  app.get("/", sitePage((request) => (heroVideoEnabled() && request.query?.hero !== "static" ? LANDING_PAGE : LANDING_PAGE_STATIC), LANDING_CSP));
+  // Backouts for the hero, with no redeploy of code: ?hero=video and ?hero=static show those versions on demand, and the
+  // AP_HERO environment variable ("live" by default, or "video" or "static") picks what everyone gets.
+  const isVariant = (value: unknown): value is HeroVariant => value === "live" || value === "video" || value === "static";
+  const heroVariant = (request: any): HeroVariant => {
+    if (isVariant(request.query?.hero)) return request.query.hero;
+    const configured = (process.env.AP_HERO ?? "").trim().toLowerCase();
+    return isVariant(configured) ? configured : "live";
+  };
+  app.get("/", sitePage((request) => LANDING_PAGES[heroVariant(request)], LANDING_CSP));
   app.get("/privacy", sitePage(() => PRIVACY_PAGE));
+
+  // The interactive demo: the same bundle serves the full-screen page and the landing hero. It reads the hero media paths from <meta> tags.
+  const demoHtml = DEMO_HTML.replace("</head>", `<meta name="ap-hero-video" content="${HERO_VIDEO_PATH}"><meta name="ap-hero-poster" content="${HERO_POSTER_PATH}"></head>`);
+  app.get("/demo", sitePage(() => demoHtml, DEMO_CSP));
+  const plain = new Map<string, Buffer>();
+  app.get<{ Params: { file: string } }>("/demo-assets/:file", async (request, reply) => {
+    const path = `/demo-assets/${request.params.file}`;
+    const asset = Object.hasOwn(DEMO_FILES, path) ? DEMO_FILES[path] : undefined;
+    if (!asset) return reply.code(404).send({ error: "not_found" });
+    reply
+      .header("content-type", asset.type)
+      .header("x-content-type-options", "nosniff")
+      .header("cache-control", "public, max-age=31536000, immutable")
+      .header("vary", "accept-encoding");
+    if (/\bgzip\b/i.test(String(request.headers["accept-encoding"] ?? ""))) return reply.header("content-encoding", "gzip").send(asset.gzip);
+    if (!plain.has(path)) plain.set(path, gunzipSync(asset.gzip));
+    return reply.send(plain.get(path));
+  });
 
   // The hero media is embedded in the build (src/hero-media.ts). Names carry a content hash, so they cache forever.
   // Range requests are supported because Safari will not play a video without them.

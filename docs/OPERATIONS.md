@@ -28,7 +28,7 @@ GitHub sign-in and AP keys are off until `AP_GITHUB_CLIENT_ID` is set, and keys 
 
 ## Landing page hero
 
-The home page opens with a looping video of AP's request flow. If a deployment shows a problem with it, set `AP_HERO_VIDEO=off` and redeploy: `/` serves the static hero (the mark and the flow diagram) to everyone, with no video markup at all. `/?hero=static` shows that version on demand, whatever the variable says. Details and how the video is made are in [HERO.md](HERO.md).
+The home page opens with an interactive 3D demo (also at `/demo`). If a deployment shows a problem with it, set `AP_HERO=video` (a recorded video of the same animation) or `AP_HERO=static` (the original mark and flow diagram, nothing animated) and redeploy. `/?hero=video` and `/?hero=static` show those versions on demand, whatever the variable says. Every failure of the demo or the video also falls back by itself. Details, the CSP the demo page needs and how it is built are in [HERO.md](HERO.md).
 
 ## Security telemetry and auditability
 

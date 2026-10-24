@@ -1,6 +1,6 @@
 // Static pages served on AP's own address: a landing page and the privacy policy.
-// Inline CSS only, no scripts, no external requests. The landing page's hero video is the one thing it loads,
-// and only from AP itself (`media-src 'self'`), so the CSP stays `default-src 'none'` plus those two directives.
+// The pages themselves are inline CSS only: no scripts, no external requests. The landing hero loads AP's own
+// media and the interactive demo (a separate page at /demo, with its own CSP), all from AP's origin.
 
 import { HERO_POSTER_PATH, HERO_VIDEO_PATH } from "./hero-media.js";
 
@@ -108,6 +108,8 @@ footer { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px dashed var(--rul
 .stage .diagram { margin: 0; min-width: 0; max-width: 100%; }
 .stage-still { background: url("${HERO_POSTER_PATH}") center / cover no-repeat; }
 .stage-video { object-fit: cover; background: transparent; }
+.stage-demo { border: 0; background: transparent; }
+.stage-note { margin: 0 0 1.5rem; font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; }
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .stage-video { display: none; } }
 @media (max-width: 36rem) { header nav { gap: .9rem; } .doc { padding: 1.1rem 1rem 1.5rem; } .diagram { min-width: 38rem; } .scroll { overflow-x: auto; } }
@@ -154,7 +156,28 @@ const LANDING_REST = `<p>An AI client, agent or service calls the public endpoin
 
 const LEAD = `<p class="lead">A private app connects <strong>outward</strong> to AP, and AI clients call it like any web API. No inbound port, no VPN, no tunnel agent.</p>`;
 
-// The hero is a stack of layers, so each failure falls back to the next one with no scripts involved:
+// Live hero: the interactive demo (/demo) in an <object>, over the same fallbacks. This page has no script of its own:
+//   - if /demo cannot load (an HTTP error or a network failure), <object> renders its empty fallback content, so the
+//     layers underneath show;
+//   - if /demo loads but cannot run the scene (no WebGL, reduced motion, a phone-sized hero, a crash), it shows the
+//     recorded video or its still frame itself (see docs/HERO.md), or stays transparent so the layers show through.
+// An <iframe> would show the browser's own error page on failure, which is why this is an <object>.
+const LIVE_SUMMARY = "Interactive 3D demonstration of AP. Drag to orbit, use the timeline to jump between the nine stages: a request reaches AP and waits in its queue, the private application polls outward, and the queued request is delivered as the answer to that poll.";
+const LIVE_HERO = `<section class="hero">
+<p class="kicker">AI Proxy / Public Rendezvous</p>
+<h1>${HEADLINE}</h1>
+${LEAD}
+</section>
+<figure class="stage" aria-label="${LIVE_SUMMARY}">
+<div class="stage-static">${DIAGRAM}</div>
+<div class="stage-still"></div>
+<object class="stage-demo" type="text/html" data="/demo" aria-label="${LIVE_SUMMARY}"></object>
+<figcaption class="sr">${STAGE_SUMMARY}</figcaption>
+</figure>
+<p class="stage-note muted">Interactive demo · <a href="/demo">full screen</a> · <a href="/?hero=video">watch the video</a> · <a href="/?hero=static">static diagram</a></p>
+${LANDING_REST}`;
+
+// Video hero. A stack of layers, so each failure falls back to the next one with no scripts involved:
 //   1. the video, when the browser can decode it and the file arrives (muted and looping; no `controls`, because
 //      browsers paint an opaque control panel over a video that failed, which would hide the layers below it)
 //   2. the still frame from the same render, painted underneath, if the video cannot play
@@ -174,7 +197,7 @@ ${LEAD}
 ${LANDING_REST}`;
 
 // The original hero: mark, headline and the flow diagram. Served at /?hero=static, and for every visitor when
-// the AP_HERO_VIDEO environment variable is "off".
+// the AP_HERO environment variable is "static".
 const STATIC_HERO = `<section class="hero">
 ${logo(132, "AP logo")}
 <p class="kicker">AI Proxy / Public Rendezvous</p>
@@ -184,8 +207,12 @@ ${LEAD}
 <div class="scroll">${DIAGRAM}</div>
 ${LANDING_REST}`;
 
-export const LANDING_PAGE = page(LANDING_TITLE, LANDING_DESCRIPTION, VIDEO_HERO, true);
-export const LANDING_PAGE_STATIC = page(LANDING_TITLE, LANDING_DESCRIPTION, STATIC_HERO, true);
+export type HeroVariant = "live" | "video" | "static";
+export const LANDING_PAGES: Record<HeroVariant, string> = {
+  live: page(LANDING_TITLE, LANDING_DESCRIPTION, LIVE_HERO, true),
+  video: page(LANDING_TITLE, LANDING_DESCRIPTION, VIDEO_HERO, true),
+  static: page(LANDING_TITLE, LANDING_DESCRIPTION, STATIC_HERO, true),
+};
 
 export const PRIVACY_PAGE = page(
   "AP Privacy Policy",

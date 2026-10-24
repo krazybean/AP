@@ -141,7 +141,8 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/`, `/privacy` | AP's landing page and privacy policy (HTML; text lives in `src/site.ts`). The landing hero is a video with fallbacks; `/?hero=static` shows the static hero ([docs/HERO.md](docs/HERO.md)) |
+| `GET` | `/demo` | The interactive 3D demo, full screen (the landing hero is the same page) |
+| `GET` | `/`, `/privacy` | AP's landing page and privacy policy (HTML; text lives in `src/site.ts`). The landing hero is an interactive 3D demo with layered fallbacks; `/?hero=video` and `/?hero=static` show the backouts ([docs/HERO.md](docs/HERO.md)) |
 | `GET` | `/health` | AP and broker health |
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
 | `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub (or Google, with `"provider":"google"`) and get an AP key |

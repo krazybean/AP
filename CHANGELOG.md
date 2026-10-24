@@ -6,8 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-- The home page now opens with a looping hero video of AP's flow: a request waiting in AP's queue, the private application polling outward, and the queued request delivered as the answer to that poll. AP serves the video and its still frame itself (`/hero-<hash>.mp4`, `/hero-<hash>.jpg`, with Range support so Safari plays it), the landing page's CSP gains `media-src 'self'` and `img-src 'self'`, and there are still no scripts.
-- The hero has layered fallbacks: if the video cannot play, the still frame from the same render shows; if that cannot load, the flow diagram shows; people who ask for reduced motion get the still. Set `AP_HERO_VIDEO=off` to serve the original static hero to everyone, or open `/?hero=static` to see it. See `docs/HERO.md`.
+- The home page now opens with an interactive 3D demonstration of AP's flow: a request waiting in AP's queue, the private application polling outward, and the queued request delivered as the answer to that poll. Drag to orbit, jump between the nine stages, pause and replay. It is also available full screen at `/demo`.
+- The landing page itself still has no script. The demo is a separate page (`/demo`) in an `<object>`, with its own CSP (`script-src 'self' blob:`, nothing from any other origin, framable only by AP). AP serves the demo and the hero media itself (`/demo-assets/*`, `/hero-<hash>.mp4`, `/hero-<hash>.jpg`), and the landing CSP gains `media-src`, `object-src`, `frame-src` and `img-src` for `'self'`.
+- Every failure falls back by itself: if the demo cannot load, the recorded still frame shows; with no WebGL, a phone-sized hero or a crash, the demo page plays a recorded video; with reduced motion, the still; if that fails too, the flow diagram. `/?hero=video` and `/?hero=static` show the video hero and the original static hero on demand, and `AP_HERO=video|static` makes either the default for everyone. See `docs/HERO.md`.
 
 ## [1.2.0] - 2026-10-23
 
