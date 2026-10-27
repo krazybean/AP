@@ -5,7 +5,7 @@
 import { HERO_POSTER_PATH, HERO_VIDEO_PATH } from "./hero-media.js";
 
 const REPO = "https://github.com/krazybean/AP";
-export const PRIVACY_UPDATED = "October 23, 2026";
+export const PRIVACY_UPDATED = "October 27, 2026";
 
 // The mark and flow diagram are inline SVG so the pages need no image files and the CSP can stay strict.
 const HEX_OUTER = "50,5 88.97,27.5 88.97,72.5 50,95 11.03,72.5 11.03,27.5";
@@ -214,7 +214,7 @@ export const LANDING_PAGES: Record<HeroVariant, string> = {
   static: page(LANDING_TITLE, LANDING_DESCRIPTION, STATIC_HERO, true),
 };
 
-export const PRIVACY_PAGE = page(
+const privacyPage = (analytics: boolean) => page(
   "AP Privacy Policy",
   "What AP collects when you sign in or use a channel, how long it is kept, and who it is shared with.",
   `<div class="doc">
@@ -227,7 +227,9 @@ export const PRIVACY_PAGE = page(
 <li><strong>Signing in is optional.</strong> If you never sign in, AP keeps no account or profile about you.</li>
 <li><strong>If you sign in</strong>, AP stores only your account id and email address (or GitHub username), hashes of your AP keys, and a few usage counts. It reads nothing else from your Google or GitHub account.</li>
 <li><strong>Channel traffic is not kept.</strong> Requests and responses are held only while they are delivered, for at most 15 minutes, and are never logged.</li>
-<li><strong>No tracking.</strong> No cookies, analytics or advertising, and your information is never sold or used to train models.</li>
+${analytics
+  ? `<li><strong>Analytics only if you opt in.</strong> Choosing Accept on this website loads Google Analytics and sets its cookies. Until then, and if you decline, nothing is sent to Google and no cookies are set. There is no advertising, and your information is never sold or used to train models.</li>`
+  : `<li><strong>No tracking.</strong> No cookies, analytics or advertising, and your information is never sold or used to train models.</li>`}
 <li><strong>You can delete your account yourself, at any time</strong>, with one request. See <a href="#delete">Your choices</a>.</li>
 </ul>
 
@@ -244,11 +246,17 @@ export const PRIVACY_PAGE = page(
 <ul>
 <li>It does not sell your information, use it for advertising or profiling, or share it with advertisers.</li>
 <li>It does not use it to train machine-learning models.</li>
-<li>It sets no cookies and includes no analytics or advertising scripts on its own pages.</li>
+${analytics
+  ? `<li>It sets no cookies and loads no scripts from third parties unless you accept analytics on this website. It never loads analytics or advertising scripts on channel traffic.</li>`
+  : `<li>It sets no cookies and includes no analytics or advertising scripts on its own pages.</li>`}
 <li>It does not link a Google account to a GitHub account, even if they share an email address. They are separate accounts.</li>
 </ul>
 <p>AP&rsquo;s use of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements. Your Google information is used only to sign you in and to identify your account.</p>
 
+${analytics ? `<h2 id="analytics">Analytics and cookies</h2>
+<p>The pages of this website (the home page and this policy) can use Google Analytics 4 to count visits. It is off until you choose <strong>Accept</strong> in the banner. If you accept, Google receives your IP address (which Google Analytics does not store), the page you viewed, your browser and device type and roughly where you are, and sets the cookies <code>_ga</code> and <code>_ga_*</code> for up to two years. AP turns off Google signals and ad personalisation. Google acts as a processor for this measurement under <a href="https://policies.google.com/privacy">Google&rsquo;s privacy policy</a>.</p>
+<p>Analytics never runs on channel traffic, the API or the embedded demo. Your choice is kept in your browser&rsquo;s local storage. Use <strong>Cookie settings</strong> in the footer to change it at any time; declining after accepting also deletes the Google Analytics cookies AP can reach.</p>
+` : ""}
 <h2>How long it is kept</h2>
 <ul>
 <li><strong>Account record</strong> (account id, email or username, when it was created): kept while your account exists, until you delete it.</li>
@@ -286,3 +294,79 @@ export const PRIVACY_PAGE = page(
 <p>Use <a href="${REPO}/issues">GitHub issues</a> for privacy questions and requests.</p>
 </div>`,
 );
+
+export const PRIVACY_PAGE = privacyPage(false);
+export const PRIVACY_PAGE_ANALYTICS = privacyPage(true);
+
+// Opt-in analytics for AP's own website pages (/ and /privacy), off unless AP_GA_ID is set.
+export const CONSENT_SCRIPT_PATH = "/consent.js";
+export const GA_ID = /^G-[A-Z0-9]{4,20}$/;
+const CONSENT_STYLE = `<style>
+#consent { position: fixed; left: 1rem; right: 1rem; bottom: 1rem; max-width: 34rem; margin: 0 auto; padding: 1rem 1.1rem; background: #101012; border: 1px solid #3a3a40; border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.6); z-index: 10; font-size: .9rem; }
+#consent[hidden] { display: none; }
+#consent p { margin: 0 0 .75rem; }
+#consent div { display: flex; gap: .6rem; flex-wrap: wrap; }
+#consent button, footer button { font: inherit; cursor: pointer; border-radius: 4px; padding: .45rem .9rem; border: 1px solid #3a3a40; background: transparent; color: var(--fg); }
+#consent button:hover, footer button:hover { border-color: var(--red); }
+footer button { border: 0; padding: 0; color: var(--muted); text-decoration: underline; }
+</style>`;
+const CONSENT_BANNER = `<div id="consent" role="dialog" aria-label="Analytics" hidden>
+<p>May this website use Google Analytics to count visits? It sets cookies and sends usage data to Google only if you accept. <a href="/privacy#analytics">Details</a></p>
+<div><button type="button" data-consent="granted">Accept</button><button type="button" data-consent="denied">Decline</button></div>
+</div>`;
+
+/** Adds the consent banner and script to a rendered page. The script loads Google Analytics only after Accept. */
+export function withAnalytics(html: string, id: string) {
+  return html
+    .replace("</head>", `${CONSENT_STYLE}</head>`)
+    .replace("</body>", `${CONSENT_BANNER}<script src="${CONSENT_SCRIPT_PATH}" data-ga="${id}" defer></script></body>`);
+}
+
+export const CONSENT_SCRIPT = `(function () {
+  var script = document.currentScript, id = script && script.getAttribute("data-ga"), KEY = "ap-consent";
+  if (!id || !/^G-[A-Z0-9]+$/.test(id)) return;
+  var banner = document.getElementById("consent");
+  function read() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
+  function write(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+  function clearCookies() {
+    var host = location.hostname, parts = host.split("."), domains = ["", host, "." + host];
+    if (parts.length > 2) domains.push("." + parts.slice(-2).join("."));
+    document.cookie.split(";").forEach(function (c) {
+      var name = c.split("=")[0].trim();
+      if (name !== "_ga" && name.indexOf("_ga_") !== 0) return;
+      domains.forEach(function (d) { document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/" + (d ? "; domain=" + d : ""); });
+    });
+  }
+  var loaded = false;
+  function load() {
+    if (loaded) { window.gtag("consent", "update", { analytics_storage: "granted" }); return; }
+    loaded = true;
+    window["ga-disable-" + id] = false;
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function () { window.dataLayer.push(arguments); };
+    window.gtag("consent", "default", { analytics_storage: "denied", ad_storage: "denied", ad_user_data: "denied", ad_personalization: "denied" });
+    window.gtag("consent", "update", { analytics_storage: "granted" });
+    window.gtag("js", new Date());
+    window.gtag("config", id, { allow_google_signals: false, allow_ad_personalization_signals: false });
+    var s = document.createElement("script");
+    s.async = true; s.src = "https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(id);
+    document.head.appendChild(s);
+  }
+  function choose(v) {
+    write(v);
+    if (banner) banner.hidden = true;
+    if (v === "granted") load();
+    else { window["ga-disable-" + id] = true; if (window.gtag) window.gtag("consent", "update", { analytics_storage: "denied" }); clearCookies(); }
+  }
+  if (banner) banner.addEventListener("click", function (e) { var v = e.target && e.target.getAttribute && e.target.getAttribute("data-consent"); if (v) choose(v); });
+  var footer = document.querySelector("footer");
+  if (footer) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = "Cookie settings";
+    b.addEventListener("click", function () { if (banner) banner.hidden = false; });
+    footer.appendChild(b);
+  }
+  var saved = read();
+  if (saved === "granted") load();
+  else { window["ga-disable-" + id] = true; if (saved !== "denied" && banner) banner.hidden = false; }
+})();
+`;
