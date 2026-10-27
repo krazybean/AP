@@ -76,6 +76,10 @@ Omitted `access` on channel creation means `public` for compatibility. Explicit 
 
 Scope-denied requests return `403` before queue or in-flight allocation. Authorization matching is local and O(number of bounded scope rules); Redis authentication returns the stored safe credential metadata in the existing authentication lookup, without one Redis query per rule.
 
+## Website analytics
+
+`AP_GA_ID` (a GA4 measurement id such as `G-XXXXXXXXXX`; anything else is ignored) turns on opt-in Google Analytics for `/` and `/privacy` only. Those pages then serve `/consent.js` and a CSP that also allows `googletagmanager.com` and `*.google-analytics.com`; nothing from Google loads until a visitor presses Accept, and the choice lives in their browser's local storage. Unset it and the site is exactly as before. Remove the variable to switch analytics off for everyone at once.
+
 ## Redis command budget
 
 The Redis broker deliberately avoids 100 ms busy polling. Upstash's REST API does not support blocking list or blocking stream reads, so AP uses bounded adaptive polling: 100 ms, 250 ms, 500 ms, 1 s, 2 s, then a 5 s cap.

@@ -261,3 +261,105 @@ test("channel hostnames never serve the demo or the hero media either", async ()
     await app.close();
   });
 });
+
+async function withGa<T>(value: string | undefined, run: () => Promise<T>) {
+  const previous = process.env.AP_GA_ID;
+  if (value === undefined) delete process.env.AP_GA_ID; else process.env.AP_GA_ID = value;
+  try { return await run(); } finally { if (previous === undefined) delete process.env.AP_GA_ID; else process.env.AP_GA_ID = previous; }
+}
+
+test("without AP_GA_ID the pages have no analytics, no banner and the unchanged CSP", async () => {
+  await withGa(undefined, async () => {
+    const app = buildTestApp(testBroker());
+    for (const url of ["/", "/privacy"]) {
+      const response = await app.inject({ method: "GET", url });
+      assert.ok(!/<script|id="consent"|consent\.js|googletagmanager/i.test(response.body), url);
+      assert.ok(!response.headers["content-security-policy"]!.toString().includes("script-src"));
+    }
+    assert.match((await app.inject({ method: "GET", url: "/privacy" })).body, /No tracking/);
+    assert.equal((await app.inject({ method: "GET", url: "/consent.js" })).statusCode, 404);
+    await app.close();
+  });
+});
+
+test("an invalid AP_GA_ID leaves analytics off", async () => {
+  await withGa("G-<script>", async () => {
+    const app = buildTestApp(testBroker());
+    assert.ok(!(await app.inject({ method: "GET", url: "/" })).body.includes("consent.js"));
+    await app.close();
+  });
+});
+
+test("with AP_GA_ID the website pages get a consent banner, a same-origin script and a CSP that allows Google", async () => {
+  await withGa("G-NBRMBDPL80", async () => {
+    const app = buildTestApp(testBroker());
+    for (const url of ["/", "/privacy"]) {
+      const response = await app.inject({ method: "GET", url });
+      const csp = response.headers["content-security-policy"]!.toString();
+      assert.match(response.body, /<div id="consent" role="dialog"[^>]* hidden>/);
+      assert.match(response.body, /<script src="\/consent\.js" data-ga="G-NBRMBDPL80" defer><\/script>/);
+      assert.ok(!/<script(?![^>]* src=)/.test(response.body), "no inline script");
+      assert.ok(!response.body.includes("googletagmanager"), "Google is not referenced before consent");
+      assert.match(csp, /script-src 'self' https:\/\/www\.googletagmanager\.com/);
+      assert.match(csp, /connect-src https:\/\/\*\.google-analytics\.com/);
+      assert.match(csp, /default-src 'none'/);
+    }
+    const privacy = (await app.inject({ method: "GET", url: "/privacy" })).body;
+    assert.match(privacy, /Analytics only if you opt in/);
+    assert.ok(!privacy.includes("No tracking"));
+    const script = await app.inject({ method: "GET", url: "/consent.js" });
+    assert.equal(script.statusCode, 200);
+    assert.match(script.headers["content-type"]!.toString(), /javascript/);
+    // analytics_storage starts denied and the tag is only added after Accept
+    assert.match(script.body, /analytics_storage: "denied"/);
+    assert.match(script.body, /allow_google_signals: false/);
+    // the embedded demo and the media never carry analytics
+    const demo = await app.inject({ method: "GET", url: "/demo" });
+    assert.ok(!demo.body.includes("consent.js") && !demo.headers["content-security-policy"]!.toString().includes("googletagmanager"));
+    await app.close();
+  });
+});
+
+test("the consent script loads Google only after Accept and stops it after Decline", async () => {
+  const { CONSENT_SCRIPT } = await import("../src/site.js");
+  const vm = await import("node:vm");
+  const run = (saved: string | null) => {
+    const loaded: string[] = [];
+    const clicks: Array<(event: unknown) => void> = [];
+    const banner = { hidden: true, addEventListener: (_: string, fn: (event: unknown) => void) => clicks.push(fn) };
+    const storage = new Map<string, string>(saved ? [["ap-consent", saved]] : []);
+    const context: Record<string, unknown> = {
+      document: {
+        currentScript: { getAttribute: () => "G-NBRMBDPL80" },
+        getElementById: () => banner, querySelector: () => null, cookie: "",
+        head: { appendChild: (el: { src: string }) => loaded.push(el.src) },
+        createElement: () => ({}),
+      },
+      localStorage: { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v) },
+      location: { hostname: "apchannels.dev" },
+      encodeURIComponent,
+    };
+    context.window = context;
+    vm.runInNewContext(CONSENT_SCRIPT, context);
+    const click = (value: string) => clicks[0]({ target: { getAttribute: () => value } });
+    return { loaded, banner, storage, click, context };
+  };
+
+  const fresh = run(null);
+  assert.equal(fresh.banner.hidden, false, "asks first");
+  assert.deepEqual(fresh.loaded, [], "nothing loads before a choice");
+  fresh.click("granted");
+  assert.equal(fresh.storage.get("ap-consent"), "granted");
+  assert.equal(fresh.banner.hidden, true);
+  assert.deepEqual(fresh.loaded, ["https://www.googletagmanager.com/gtag/js?id=G-NBRMBDPL80"]);
+
+  const declined = run(null);
+  declined.click("denied");
+  assert.deepEqual(declined.loaded, []);
+  assert.equal(declined.context["ga-disable-G-NBRMBDPL80"], true);
+
+  const remembered = run("denied");
+  assert.equal(remembered.banner.hidden, true);
+  assert.deepEqual(remembered.loaded, []);
+  assert.equal(run("granted").loaded.length, 1, "a saved Accept loads it without asking again");
+});

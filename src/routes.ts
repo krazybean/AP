@@ -14,7 +14,7 @@ import { canonicalApplicationPath, canonicalDispatchPath, scopeAllows, validateS
 import { buildChannelUrl, classifyChannelHost, classifyChannelHostFailure, normalizeBaseDomain } from "./origin-routing.js";
 import { HERO_POSTER, HERO_POSTER_PATH, HERO_VIDEO, HERO_VIDEO_PATH } from "./hero-media.js";
 import { DEMO_FILES, DEMO_HTML } from "./demo-assets.js";
-import { LANDING_PAGES, PRIVACY_PAGE, type HeroVariant } from "./site.js";
+import { CONSENT_SCRIPT, CONSENT_SCRIPT_PATH, GA_ID, LANDING_PAGES, PRIVACY_PAGE, PRIVACY_PAGE_ANALYTICS, withAnalytics, type HeroVariant } from "./site.js";
 import { createAuditEmitter, loggerAuditSink, SecurityMetrics, type AuditSink, type SecurityAuditEvent } from "./security-telemetry.js";
 import { validateServiceName } from "./services.js";
 
@@ -243,8 +243,20 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     const configured = (process.env.AP_HERO ?? "").trim().toLowerCase();
     return isVariant(configured) ? configured : "live";
   };
-  app.get("/", sitePage((request) => LANDING_PAGES[heroVariant(request)], LANDING_CSP));
-  app.get("/privacy", sitePage(() => PRIVACY_PAGE));
+  // Opt-in analytics on AP's own website pages only, when AP_GA_ID is a GA4 measurement id. Off, the pages and CSPs are unchanged.
+  const analyticsId = () => { const id = (process.env.AP_GA_ID ?? "").trim(); return GA_ID.test(id) ? id : ""; };
+  const GA_CSP = (csp: string) => csp
+    .replace("img-src data:", "img-src data: https://*.google-analytics.com https://*.googletagmanager.com")
+    .replace("; base-uri", "; script-src 'self' https://www.googletagmanager.com; connect-src https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; base-uri");
+  const analyticsPage = (html: (request: any) => string, csp: string) => async (request: any, reply: any) => {
+    const id = analyticsId();
+    return sitePage((r) => id ? withAnalytics(html(r), id) : html(r), id ? GA_CSP(csp) : csp)(request, reply);
+  };
+  app.get("/", analyticsPage((request) => LANDING_PAGES[heroVariant(request)], LANDING_CSP));
+  app.get("/privacy", analyticsPage(() => analyticsId() ? PRIVACY_PAGE_ANALYTICS : PRIVACY_PAGE, PAGE_CSP));
+  app.get(CONSENT_SCRIPT_PATH, async (_request, reply) => analyticsId()
+    ? reply.header("content-type", "application/javascript; charset=utf-8").header("x-content-type-options", "nosniff").header("cache-control", "public, max-age=300").send(CONSENT_SCRIPT)
+    : reply.code(404).send({ error: "not_found" }));
 
   // The interactive demo: the same bundle serves the full-screen page and the landing hero. It reads the hero media paths from <meta> tags.
   const demoHtml = DEMO_HTML.replace("</head>", `<meta name="ap-hero-video" content="${HERO_VIDEO_PATH}"><meta name="ap-hero-poster" content="${HERO_POSTER_PATH}"></head>`);
