@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { BrokerCapacityError, ChannelRateLimitError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type ExposureConfig } from "./broker.js";
+import { BrokerCapacityError, ChannelRateLimitError, DEFAULT_BROKER_CAPACITY, type AccessConfig, type Broker, type BrokerCapacity, type BrokerMetrics, type DownstreamResponse, type PendingRequest, type PollActivity, type ExposureConfig } from "./broker.js";
 import { CLIENT_CREDENTIAL_LIMIT, createClientCredential, digestToken, tokenDigestsMatch, type ClientCredentialMetadata } from "./client-credentials.js";
 import { MemoryAccountStore } from "./accounts.js";
 import { validateScopes } from "./client-scopes.js";
@@ -224,10 +224,11 @@ export class ChannelBroker implements Broker {
     });
   }
 
-  async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
+  async next(channelId: string, secret: string, waitMs = 25_000, activity: PollActivity = "normal"): Promise<PendingRequest | null> {
     const channel = this.getChannel(channelId);
     if (!channel) throw new Error("CHANNEL_NOT_FOUND");
     if (!tokenDigestsMatch(secret, channel.secretDigest)) throw new Error("CHANNEL_UNAUTHORIZED");
+    if (activity === "none") return null; // keepalive: no data exchanged, nothing refreshed
     channel.expiresAt = Date.now() + CHANNEL_TTL_MS;
 
     const inFlight = channel.queue.filter((item) => (item.request as PendingRequest & { delivered?: boolean }).delivered).length;

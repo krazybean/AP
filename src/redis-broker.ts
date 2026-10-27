@@ -12,6 +12,7 @@ import {
   type BrokerMetrics,
   type DownstreamResponse,
   type PendingRequest,
+  type PollActivity,
   type ExposureConfig,
 } from "./broker.js";
 import { RedisAccountStore } from "./redis-accounts.js";
@@ -332,8 +333,10 @@ export class RedisBroker implements Broker {
     }
   }
 
-  async next(channelId: string, secret: string, waitMs = 25_000): Promise<PendingRequest | null> {
+  async next(channelId: string, secret: string, waitMs = 25_000, activity: PollActivity = "normal"): Promise<PendingRequest | null> {
     const channel = await this.assertChannelSecret(channelId, secret);
+    // A keepalive (X-AP-Activity: none) exchanges no data: the secret check above is its only Redis read.
+    if (activity === "none") return null;
     if (channel.accessMode === "bearer") await this.touchAccess(channelId);
 
     const deadline = Date.now() + waitMs;
