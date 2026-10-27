@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- The home page now opens with an interactive 3D demonstration of AP's flow: a request waiting in AP's queue, the private application polling outward, and the queued request delivered as the answer to that poll. Drag to orbit, jump between the nine stages, pause and replay. It is also available full screen at `/demo`.
+- The landing page itself still has no script. The demo is a separate page (`/demo`) in an `<object>`, with its own CSP (`script-src 'self' blob:`, nothing from any other origin, framable only by AP). AP serves the demo and the hero media itself (`/demo-assets/*`, `/hero-<hash>.mp4`, `/hero-<hash>.jpg`), and the landing CSP gains `media-src`, `object-src`, `frame-src` and `img-src` for `'self'`.
+- Every failure falls back by itself: if the demo cannot load, the recorded still frame shows; with no WebGL, a phone-sized hero or a crash, the demo page plays a recorded video; with reduced motion, the still; if that fails too, the flow diagram. `/?hero=video` and `/?hero=static` show the video hero and the original static hero on demand, and `AP_HERO=video|static` makes either the default for everyone. See `docs/HERO.md`.
+
+- Docs: the README opens with the hero diagram (`docs/assets/ap-hero.png`) in place of the ASCII sketch.
+
 - Docs: the versioning policy in `docs/ROADMAP.md` now treats small additive changes as patch releases (`1.2.x`) and keeps minor bumps for larger announced capabilities.
 
 ## [1.2.0] - 2026-10-23

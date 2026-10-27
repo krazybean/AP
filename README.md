@@ -10,24 +10,9 @@ A private application connects **outward** to AP, and AP gives it a public HTTPS
 
 The private app needs no inbound port, no VPN and no tunnel agent: it talks to AP over ordinary outbound HTTPS.
 
-```text
-AI client / agent / service
-            │
-            │ HTTPS
-            ▼
-    ┌───────────────┐
-    │      AP       │
-    │  public edge  │
-    └───────┬───────┘
-            │
-            │ outbound-only uplink
-            ▼
-    ┌───────────────┐
-    │  private app  │
-    │ laptop / LAN  │
-    │ lab / server  │
-    └───────────────┘
-```
+<p align="center">
+  <img src="docs/assets/ap-hero.png" alt="AI clients call AP's public /c/{channel} URL. AP holds the channel state and request queue. The private application polls AP outbound, receives queued requests and returns its responses through the same channel.">
+</p>
 
 ---
 
@@ -141,7 +126,8 @@ Downstream (private app) endpoints authenticate with the channel secret, sent as
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/`, `/privacy` | AP's landing page and privacy policy (HTML; text lives in `src/site.ts`) |
+| `GET` | `/demo` | The interactive 3D demo, full screen (the landing hero is the same page) |
+| `GET` | `/`, `/privacy` | AP's landing page and privacy policy (HTML; text lives in `src/site.ts`). The landing hero is an interactive 3D demo with layered fallbacks; `/?hero=video` and `/?hero=static` show the backouts ([docs/HERO.md](docs/HERO.md)) |
 | `GET` | `/health` | AP and broker health |
 | `GET` | `/metrics` | Operational counters (requires `AP_METRICS_TOKEN` in production) |
 | `POST` | `/auth/device`, `/auth/device/token` | Sign in with GitHub (or Google, with `"provider":"google"`) and get an AP key |
