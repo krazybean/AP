@@ -135,8 +135,11 @@ class FakeRedis {
     this.sets.delete(key);
   }
 
+  readonly scripts: string[] = [];
+
   async eval(script: string, keys: string[], args: string[]) {
     this.count("eval");
+    this.scripts.push(script);
     if (script.includes("ap:create-service")) {
       if (this.values.has(keys[0])) return 0;
       this.values.set(keys[0], args[0]);
@@ -463,4 +466,23 @@ test("Redis channel records without a secret reject an empty secret", async () =
   await redis.set(`ap:channel:${id}`, JSON.stringify({ accessMode: "public" }));
 
   await assert.rejects(broker.next(id, "", 0), /CHANNEL_UNAUTHORIZED/);
+});
+
+test("Redis broker answers an X-AP-Activity: none poll with one read and no writes", async () => {
+  const redis = new FakeRedis();
+  const broker = new RedisBroker(redis as never);
+  const { id, secret } = await broker.createChannel("activity-none", 10, { mode: "bearer" });
+  redis.counts.clear();
+
+  assert.equal(await broker.next(id, secret, 25_000, "none"), null);
+  assert.deepEqual([...redis.counts], [["get", 1]]);
+  await assert.rejects(broker.next(id, `${secret}x`, 25_000, "none"), /CHANNEL_UNAUTHORIZED/);
+
+  const result = broker.dispatch(id, { method: "GET", path: "/", headers: {}, body: null }, 1_000);
+  assert.equal(await broker.next(id, secret, 25_000, "none"), null);
+
+  const pending = await broker.next(id, secret, 100);
+  assert.ok(pending, "the queued request was left for a normal poll");
+  await broker.respond(id, secret, pending.id, { statusCode: 200 });
+  await result;
 });

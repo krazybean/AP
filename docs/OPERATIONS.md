@@ -91,6 +91,7 @@ Approximate command budgets after the hardening pass are:
 | First channel creation in a rate-limit bucket | 3 |
 | Subsequent channel creation in the same bucket | 2 |
 | Idle 25 s downstream `/next` poll | ~11 |
+| Downstream `/next` keepalive with `X-AP-Activity: none` | 1 read |
 | Dispatch admission before waiting | 1 atomic Lua call |
 | Response wait for 5 s | ~6 polling GETs |
 | Response wait for 15 s | ~8 polling GETs |

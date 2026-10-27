@@ -58,6 +58,9 @@ export class ChannelRateLimitError extends Error {
   }
 }
 
+/** `none` is a poll that must not count as channel activity (X-AP-Activity: none). */
+export type PollActivity = "normal" | "none";
+
 export interface Broker {
   readonly type: "memory" | "redis";
   readonly accounts: import("./accounts.js").AccountStore;
@@ -78,6 +81,6 @@ export interface Broker {
     request: Omit<PendingRequest, "id">,
     timeoutMs?: number,
   ): Promise<DownstreamResponse>;
-  next(channelId: string, secret: string, waitMs?: number): Promise<PendingRequest | null>;
+  next(channelId: string, secret: string, waitMs?: number, activity?: PollActivity): Promise<PendingRequest | null>;
   respond(channelId: string, secret: string, requestId: string, response: DownstreamResponse): Promise<void>;
 }

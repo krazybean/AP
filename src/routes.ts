@@ -5,7 +5,7 @@ import { isIP } from "node:net";
 import { gunzipSync } from "node:zlib";
 
 import { registerAccountRoutes } from "./account-routes.js";
-import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig } from "./broker.js";
+import { BrokerCapacityError, BrokerUnavailableError, ChannelRateLimitError, type AccessConfig, type Broker, type DownstreamResponse, type ExposureConfig, type PollActivity } from "./broker.js";
 import { createBroker } from "./create-broker.js";
 import type { GitHubDeviceClient } from "./github.js";
 import type { GoogleDeviceClient } from "./google.js";
@@ -554,7 +554,7 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
     try {
       const account = await accounts.caller(request, reply);
       if (account === false || !(await accounts.channelAllowed(request, reply, account, request.params.channel))) return;
-      const pending = await broker.next(request.params.channel, bearerToken(request.headers.authorization));
+      const pending = await broker.next(request.params.channel, bearerToken(request.headers.authorization), undefined, pollActivity(request.headers));
       if (!pending) return reply.code(204).send();
       return pending;
     } catch (error) {
@@ -769,6 +769,11 @@ export function registerRoutes(app: FastifyInstance, broker: Broker = createBrok
 
   function clientAccessToken(headers: Record<string, string | string[] | undefined>) {
     return typeof headers["x-ap-access-token"] === "string" ? headers["x-ap-access-token"] : "";
+  }
+
+  function pollActivity(headers: Record<string, string | string[] | undefined>): PollActivity {
+    const value = headers["x-ap-activity"];
+    return typeof value === "string" && value.trim().toLowerCase() === "none" ? "none" : "normal";
   }
 
   function downstreamSecret(headers: Record<string, string | string[] | undefined>) {

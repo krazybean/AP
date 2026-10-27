@@ -268,3 +268,5 @@ Named services are created with `POST /services`, discovered with exact `GET /se
 Channel creation exists; durable application identity and channel reclaim do not yet. A downstream should currently expect to create a new channel when starting rather than depending on a permanent public URL.
 
 The current implementations expire channels after 15 minutes without activity. Reconnecting applications create a new channel. This lifetime is an implementation default, not yet a stable protocol guarantee, and durable channel reclaim is not implemented.
+
+A downstream that only needs to signal it is still there can send `X-AP-Activity: none` on `GET /channels/:channel/next`. AP checks the secret and answers `204` immediately. Nothing is delivered, and the poll does not count as activity, so it does not extend the 15-minute lifetime: a channel with no other traffic still expires. To receive requests, poll without the header.
