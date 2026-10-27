@@ -153,7 +153,7 @@ test("memory broker forgets expired creation windows and expired channels", asyn
 });
 
 test("X-AP-Activity: none on /next does not refresh the channel, any other value does", async () => {
-  const broker = testBroker();
+  const broker = new ChannelBroker(); // reads the memory broker's timers directly, so not testBroker()
   const { id, secret } = await broker.createChannel();
   const app = buildTestApp(broker);
   const channel = (broker as unknown as { channels: Map<string, { expiresAt: number }> }).channels.get(id)!;
