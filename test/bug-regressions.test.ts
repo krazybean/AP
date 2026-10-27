@@ -151,3 +151,26 @@ test("memory broker forgets expired creation windows and expired channels", asyn
   assert.equal(internals.creationLimits.has("198.51.100.1"), false);
   assert.equal(internals.channels.has(id), false);
 });
+
+test("X-AP-Activity: none on /next does not refresh the channel, any other value does", async () => {
+  const broker = testBroker();
+  const { id, secret } = await broker.createChannel();
+  const app = buildTestApp(broker);
+  const channel = (broker as unknown as { channels: Map<string, { expiresAt: number }> }).channels.get(id)!;
+  const poll = (activity?: string) => app.inject({
+    method: "GET",
+    url: `/channels/${id}/next`,
+    headers: { authorization: `Bearer ${secret}`, ...(activity === undefined ? {} : { "x-ap-activity": activity }) },
+  });
+  const rewind = () => { channel.expiresAt = Date.now() + 1_000; return channel.expiresAt; };
+
+  for (const [value, refreshes] of [["none", false], [" NONE ", false], ["active", true], ["", true], [undefined, true]] as const) {
+    const before = rewind();
+    const original = broker.next.bind(broker);
+    broker.next = ((c, s, _w, a) => original(c, s, 0, a)) as typeof broker.next;
+    const response = await poll(value);
+    broker.next = original;
+    assert.equal(response.statusCode, 204);
+    assert.equal(channel.expiresAt > before, refreshes, `header ${JSON.stringify(value)}`);
+  }
+});
